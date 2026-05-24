@@ -1,0 +1,16 @@
+diff --git a/lib/old_name.lua b/lib/new_name.lua
+similarity index 92%
+rename from lib/old_name.lua
+rename to lib/new_name.lua
+diff --git a/lib/utils.lua b/lib/copy_utils.lua
+similarity index 85%
+copy from lib/utils.lua
+copy to lib/copy_utils.lua
+diff --git a/lib/utils.lua b/lib/utils.lua
+index 1111111..2222222 100644
+--- a/lib/utils.lua
++++ b/lib/utils.lua
+@@ -1 +1,2 @@
+-function util() end
++function util(x) end
++function extra() end

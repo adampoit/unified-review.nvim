@@ -1,0 +1,17 @@
+local jobs = require("unified_review.util.jobs")
+
+describe("jobs", function()
+	it("captures successful command output", function()
+		local result = jobs.run_sync("printf", { "hello" })
+		assert.is_true(result.ok)
+		assert.are.equal(0, result.code)
+		assert.are.equal("hello", result.stdout)
+	end)
+
+	it("reports missing executables", function()
+		local result = jobs.run_sync("unified-review-missing-command", {})
+		assert.is_false(result.ok)
+		assert.are.equal(127, result.code)
+		assert.matches("executable not found", result.stderr)
+	end)
+end)

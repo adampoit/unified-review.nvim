@@ -1,0 +1,16 @@
+diff --git a/path with spaces/file name.lua b/path with spaces/file name.lua
+index 1111111..2222222 100644
+--- a/path with spaces/file name.lua
++++ b/path with spaces/file name.lua
+@@ -1,3 +1,4 @@
+ local a = 1
+-local b = 2
++local b = 3
++local c = 4
+diff --git a/src/another path/read me.md b/src/another path/read me.md
+index 3333333..4444444 100644
+--- a/src/another path/read me.md
++++ b/src/another path/read me.md
+@@ -1 +1 @@
+-# Old Title
++# New Title

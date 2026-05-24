@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "LuaJIT",
+  "runtime.path": [
+    "lua/?.lua",
+    "lua/?/init.lua",
+    "tests/?.lua",
+    "tests/?/init.lua",
+    "?.lua",
+    "?/init.lua"
+  ],
+  "workspace.checkThirdParty": false,
+  "workspace.library": ["${3rd}/luv/library", "tests/types"],
+  "diagnostics.globals": [
+    "vim",
+    "describe",
+    "it",
+    "before_each",
+    "after_each",
+    "pending",
+    "assert",
+    "stub",
+    "spy"
+  ]
+}

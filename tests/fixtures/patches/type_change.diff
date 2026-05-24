@@ -1,0 +1,24 @@
+diff --git a/bin/script.sh b/bin/script.sh
+old mode 100644
+new mode 100755
+diff --git a/link b/link
+deleted file mode 120000
+index 1111111..0000000
+--- a/link
++++ /dev/null
+@@ -1 +0,0 @@
+-target
+diff --git a/link b/link
+new file mode 120000
+index 0000000..1111111
+--- /dev/null
++++ b/link
+@@ -0,0 +1 @@
++target
+diff --git a/submodule b/submodule
+index 1111111..2222222 160000
+--- a/submodule
++++ b/submodule
+@@ -1 +1 @@
+-Subproject commit 1111111111111111111111111111111111111111
++Subproject commit 2222222222222222222222222222222222222222

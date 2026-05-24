@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:e2e",
+    "test:e2e": "npm run test:e2e:plugin && npm run test:e2e:components",
+    "test:e2e:plugin": "nix develop -c npm exec -- tui-test tests/e2e/target-picker.test.ts tests/e2e/thread-panel.test.ts tests/e2e/comments/*.test.ts",
+    "test:e2e:components": "nix develop -c npm exec -- tui-test tests/storybook/*.test.ts",
+    "test:storybook": "npm run test:e2e:components",
+    "test:e2e:artifacts": "npm run test:e2e:plugin:artifacts && npm run test:e2e:components:artifacts",
+    "test:e2e:plugin:artifacts": "UNIFIED_REVIEW_E2E_ARTIFACTS=1 nix develop -c npm exec -- tui-test tests/e2e/target-picker.test.ts tests/e2e/thread-panel.test.ts tests/e2e/comments/*.test.ts",
+    "test:e2e:components:artifacts": "UNIFIED_REVIEW_E2E_ARTIFACTS=1 nix develop -c npm exec -- tui-test tests/storybook/*.test.ts",
+    "test:storybook:artifacts": "npm run test:e2e:components:artifacts"
+  },
+  "devDependencies": {
+    "@microsoft/tui-test": "0.0.4",
+    "@types/node": "^26.0.0",
+    "typescript": "^5.0.0"
+  }
+}
