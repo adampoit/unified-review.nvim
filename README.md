@@ -32,7 +32,7 @@ A Neovim plugin for reviewing local changes, jj changes, and GitHub pull request
 {
   "adampoit/unified-review.nvim",
   dependencies = {
-    "adampoit/codediff.nvim",
+    "esmuellert/codediff.nvim",
   },
   config = function()
     require("unified_review").setup({})
