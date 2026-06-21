@@ -8,6 +8,8 @@ const nvimArgs = [
   "--clean",
   "-n",
   "--cmd",
+  "set termguicolors",
+  "--cmd",
   "set rtp^=.",
   "--cmd",
   "lua package.path='tests/?.lua;tests/?/init.lua;'..package.path",
