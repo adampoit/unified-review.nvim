@@ -1,6 +1,7 @@
 local config = require("unified_review.config")
 local selection = require("unified_review.session.selection")
 local signs = require("unified_review.ui.signs")
+local debug = require("unified_review.util.debug")
 
 local M = {}
 
@@ -190,6 +191,12 @@ local function attach_review_keymaps(session)
 	local seen = {}
 	add_buffer(buffers, seen, session.ui.left_buffer)
 	add_buffer(buffers, seen, session.ui.right_buffer)
+	if session.ui.left_window and vim.api.nvim_win_is_valid(session.ui.left_window) then
+		add_buffer(buffers, seen, vim.api.nvim_win_get_buf(session.ui.left_window))
+	end
+	if session.ui.right_window and vim.api.nvim_win_is_valid(session.ui.right_window) then
+		add_buffer(buffers, seen, vim.api.nvim_win_get_buf(session.ui.right_window))
+	end
 	add_buffer(buffers, seen, session.ui.files_buffer)
 
 	local codediff_session = session.ui.codediff_session
@@ -210,6 +217,11 @@ local function attach_review_keymaps(session)
 		set(buf, "n", km.summary or km.submit, "<cmd>UnifiedReview summary<cr>")
 		set(buf, "n", km.toggle_export, "<cmd>UnifiedReview toggle-export<cr>")
 	end
+	debug.event("diff.keymaps.attach", {
+		session = session and session.id,
+		buffers = buffers,
+		codediff_tab = session and session.ui and session.ui.codediff_tab,
+	})
 
 	for _, buf in ipairs({ session.ui.left_buffer, session.ui.right_buffer }) do
 		set(buf, "x", km.comment, function()
@@ -239,6 +251,13 @@ local function in_blocking_review_ui(session)
 	return name:match("^unified%-review://comment/") ~= nil
 end
 
+local function window_buffer(win)
+	if win and vim.api.nvim_win_is_valid(win) then
+		return vim.api.nvim_win_get_buf(win)
+	end
+	return nil
+end
+
 local function sync_from_codediff(session, tabpage, result)
 	if in_blocking_review_ui(session) then
 		return
@@ -251,14 +270,27 @@ local function sync_from_codediff(session, tabpage, result)
 	local left_buf, right_buf = lifecycle.get_buffers(tabpage)
 	local left_win, right_win = lifecycle.get_windows(tabpage)
 	local codediff_session = lifecycle.get_session(tabpage)
+	local ui_left_win = left_win or result.original_win
+	local ui_right_win = right_win or result.modified_win
+	local win_left_buf = window_buffer(ui_left_win)
+	local win_right_buf = window_buffer(ui_right_win)
 
 	session.ui = session.ui or {}
 	session.ui.tab = tabpage
 	session.ui.codediff_tab = tabpage
-	session.ui.left_buffer = left_buf or result.original_buf
-	session.ui.right_buffer = right_buf or result.modified_buf
-	session.ui.left_window = left_win or result.original_win
-	session.ui.right_window = right_win or result.modified_win
+	session.ui.left_buffer = win_left_buf or left_buf or result.original_buf
+	session.ui.right_buffer = win_right_buf or right_buf or result.modified_buf
+	session.ui.left_window = ui_left_win
+	session.ui.right_window = ui_right_win
+	if win_left_buf ~= left_buf or win_right_buf ~= right_buf then
+		debug.event("diff.sync.window_buffers", {
+			session = session.id,
+			lifecycle_left_buffer = left_buf,
+			lifecycle_right_buffer = right_buf,
+			window_left_buffer = win_left_buf,
+			window_right_buffer = win_right_buf,
+		})
+	end
 	session.ui.buffers = { session.ui.left_buffer, session.ui.right_buffer }
 	session.ui.windows = { session.ui.left_window, session.ui.right_window }
 	session.ui.codediff_session = codediff_session
@@ -352,6 +384,29 @@ end
 
 M._attach_review_keymaps = attach_review_keymaps
 
+function M.sync(session)
+	if not (session and session.ui and session.ui.codediff_tab) then
+		debug.event("diff.sync.skip", { reason = "missing-codediff-tab", session = session and session.id })
+		return false
+	end
+	if not vim.api.nvim_tabpage_is_valid(session.ui.codediff_tab) then
+		debug.event(
+			"diff.sync.skip",
+			{ reason = "invalid-codediff-tab", session = session.id, tab = session.ui.codediff_tab }
+		)
+		return false
+	end
+	sync_from_codediff(session, session.ui.codediff_tab, {})
+	debug.event("diff.sync", {
+		session = session.id,
+		left_buffer = session.ui.left_buffer,
+		right_buffer = session.ui.right_buffer,
+		left_window = session.ui.left_window,
+		right_window = session.ui.right_window,
+	})
+	return true
+end
+
 function M.focus_hunk(session)
 	local hunk
 	if session.ui and session.ui.codediff_tab then
@@ -390,7 +445,8 @@ function M.attach(session, tabpage)
 	schedule_sync(session, 150)
 end
 
-function M.render(session)
+function M.render(session, opts)
+	opts = opts or {}
 	local view = codediff_modules()
 	if not view then
 		vim.notify(
@@ -417,7 +473,13 @@ function M.render(session)
 			modified_revision = mod_revision,
 			layout = "side-by-side",
 		}
-		view.update(session.ui.codediff_tab, cfg, true)
+		local auto_scroll = opts.auto_scroll_to_first_hunk ~= false
+		debug.event("diff.render.update", {
+			session = session.id,
+			file = file.path,
+			auto_scroll_to_first_hunk = auto_scroll,
+		})
+		view.update(session.ui.codediff_tab, cfg, auto_scroll)
 		schedule_sync(session, 150)
 		return
 	end

@@ -68,31 +68,38 @@ Packer users: adapt the above with `use({ ... })` and `requires = { ... }`.
   :UnifiedReview pr 123
   ```
 
+- GitHub pull request comments with your local worktree on the right:
+
+  ```vim
+  :UnifiedReview pr-local 123
+  ```
+
 ## Commands
 
-| Command                              | Description                                         |
-| ------------------------------------ | --------------------------------------------------- |
-| `:UnifiedReview`                     | Open the target picker                              |
-| `:UnifiedReview local [base] [head]` | Open a local Git review                             |
-| `:UnifiedReview current`             | Open the current jj change or Git working target    |
-| `:UnifiedReview pr [number\|url]`    | Open an explicit PR, or infer the current branch PR |
+| Command                                 | Description                                         |
+| --------------------------------------- | --------------------------------------------------- |
+| `:UnifiedReview`                        | Open the target picker                              |
+| `:UnifiedReview local [base] [head]`    | Open a local Git review                             |
+| `:UnifiedReview current`                | Open the current jj change or Git working target    |
+| `:UnifiedReview pr [number\|url]`       | Open an explicit PR, or infer the current branch PR |
+| `:UnifiedReview pr-local [number\|url]` | Open PR comments with local worktree on the right   |
 
-Run `:UnifiedReview help` for the full list: `comment`, `reply`, `threads`, `summary`, `save`, `submit`, `publish-drafts`, `toggle-export`, `resolve-thread`, `reopen-thread`, `edit-draft`, `delete-draft`, `clear`, `undo`, `status`, `close`.
+Run `:UnifiedReview help` for the full list: `pr-local`, `comment`, `reply`, `threads`, `summary`, `save`, `submit`, `publish-drafts`, `toggle-export`, `resolve-thread`, `reopen-thread`, `edit-draft`, `delete-draft`, `clear`, `undo`, `status`, `close`.
 
 ## Default keymaps
 
-| Key          | Action                                   |
-| ------------ | ---------------------------------------- |
-| `<CR>`       | Open selected file in the file panel     |
-| `]f` / `[f`  | Next / previous file                     |
-| `]h` / `[h`  | Next / previous hunk                     |
-| `]t` / `[t`  | Next / previous thread                   |
-| `<leader>rc` | New comment                              |
-| `<leader>rr` | Reply                                    |
-| `<leader>rt` | Thread panel                             |
-| `<leader>rS` | Review summary                           |
-| `<leader>re` | Toggle export marker                     |
-| `q`          | Close the current review surface/session |
+| Key          | Action                                                    |
+| ------------ | --------------------------------------------------------- |
+| `<CR>`       | Open selected file in the file panel                      |
+| `]f` / `[f`  | Next / previous file                                      |
+| `]h` / `[h`  | Next / previous hunk                                      |
+| `]t` / `[t`  | Next / previous thread                                    |
+| `<leader>rc` | New comment                                               |
+| `<leader>rr` | Reply                                                     |
+| `<leader>rt` | Thread panel                                              |
+| `<leader>rS` | Review summary                                            |
+| `<leader>re` | Toggle export marker (disambiguates overlapping comments) |
+| `q`          | Close the current review surface/session                  |
 
 ## Configuration
 

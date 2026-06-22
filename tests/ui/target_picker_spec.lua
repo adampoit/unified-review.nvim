@@ -139,6 +139,20 @@ describe("target picker rendering", function()
 		assert.matches("Base and head must be different", text)
 	end)
 
+	it("renders a GitHub pull request loading state", function()
+		local lines = picker.render_lines(picker_state({
+			mode = "pr",
+			pr_loading = true,
+			loader_frame = 2,
+			pr_height = 4,
+		}))
+		local text = table.concat(lines, "\n")
+
+		assert.are.equal(18, #lines)
+		assert.matches("⠹ Fetching GitHub pull requests", text)
+		assert.matches("⠹ Fetching remote GitHub data", text)
+	end)
+
 	it("filters commit range rows", function()
 		local lines = picker.render_lines(picker_state({
 			mode = "commit",
@@ -284,6 +298,9 @@ describe("target picker rendering", function()
 		state.selected = 2
 		press(state, "<CR>")
 		assert.are.equal("pr", state.mode)
+		assert.is_true(vim.wait(100, function()
+			return state.pr_loading == false
+		end))
 		press(state, "/")
 		press(state, "p")
 		assert.are.equal("p", state.pr_filter)

@@ -928,24 +928,27 @@ describe("inline comments", function()
 		assert.are.equal(3, inline.previous_inline(buf, 0))
 	end)
 
-	it("handles stale thread icons", function()
+	it("does not render stale thread blocks in diff buffers", function()
 		local buf = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line" })
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line 1", "line 2" })
 		local session = {
 			ui = { left_buffer = vim.api.nvim_create_buf(false, true), right_buffer = buf },
 			threads = {
 				{
 					state = "stale",
-					is_outdated = true,
 					target = { path = "a.lua", side = "right", line = 1 },
 					comments = { { body = "gone" } },
+				},
+				{
+					state = "open",
+					is_outdated = true,
+					target = { path = "a.lua", side = "right", line = 2 },
+					comments = { { body = "outdated" } },
 				},
 			},
 		}
 
 		inline.place(session)
-		local marks = extmarks(buf)
-		assert.are.equal(1, #marks)
-		assert.matches("⚠ stale", flatten_virt_lines(marks[1]))
+		assert.are.equal(0, #extmarks(buf))
 	end)
 end)

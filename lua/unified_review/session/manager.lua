@@ -8,6 +8,7 @@ local lifecycle = require("unified_review.session.lifecycle")
 local selection = require("unified_review.session.selection")
 local state = require("unified_review.session.state")
 local layout = require("unified_review.ui.layout")
+local loading = require("unified_review.ui.loading")
 local config = require("unified_review.config")
 local export = require("unified_review.export")
 local review_target = require("unified_review.domain.review_target")
@@ -144,6 +145,34 @@ function M.open_local(opts)
 	return session, nil
 end
 
+local function activate_github_session(session)
+	session.id = session.id
+		or table.concat(
+			{ "github", session.target.owner or "", session.target.repo or "", session.target.number or "" },
+			":"
+		)
+	session.kind = "github_pr"
+	load_comments(session)
+	selection.initialize(session)
+	state.set_active(session)
+	layout.open(session)
+	local local_suffix = session.target
+			and session.target.render_strategy == "local_worktree"
+			and " (local worktree on right; drafts publish after matching remote lines exist)"
+		or ""
+	vim.notify(
+		string.format(
+			"Loaded GitHub PR #%s with %d changed file(s)%s",
+			tostring(session.target.number),
+			#session.files,
+			local_suffix
+		),
+		vim.log.levels.INFO,
+		{ title = "unified-review" }
+	)
+	return session, nil
+end
+
 function M.open_target(target, opts)
 	opts = opts or {}
 	target = review_target.new(target or {})
@@ -153,26 +182,7 @@ function M.open_target(target, opts)
 			notify_error(err and (err.message or err.stderr) or "failed to open GitHub PR review", "open-pr")
 			return nil, err
 		end
-		session.id = session.id
-			or table.concat(
-				{ "github", session.target.owner or "", session.target.repo or "", session.target.number or "" },
-				":"
-			)
-		session.kind = "github_pr"
-		load_comments(session)
-		selection.initialize(session)
-		state.set_active(session)
-		layout.open(session)
-		vim.notify(
-			string.format(
-				"Loaded GitHub PR #%s with %d changed file(s)",
-				tostring(session.target.number),
-				#session.files
-			),
-			vim.log.levels.INFO,
-			{ title = "unified-review" }
-		)
-		return session, nil
+		return activate_github_session(session)
 	end
 	if target.kind == "jj" then
 		local ok_provider, jj_provider = pcall(require, "unified_review.providers.diff.jj_local")
@@ -198,6 +208,31 @@ function M.open_target(target, opts)
 	return M.open_local(target)
 end
 
+function M.open_target_with_loading(target, opts)
+	opts = opts or {}
+	target = review_target.new(target or {})
+	if target.kind ~= "github_pr" or type(github_pr_provider.open_async) ~= "function" then
+		return M.open_target(target, opts)
+	end
+
+	local number = target.number or target.url or target.ref or "?"
+	local indicator = loading.open({
+		message = "Loading GitHub PR #" .. tostring(number),
+		title = " Unified Review ",
+	})
+	github_pr_provider.open_async(target, function(session, err)
+		if indicator then
+			indicator:close()
+		end
+		if not session then
+			notify_error(err and (err.message or err.stderr) or "failed to open GitHub PR review", "open-pr")
+			return
+		end
+		activate_github_session(session)
+	end)
+	return nil, nil
+end
+
 function M.pick_review_target(opts)
 	opts = opts or {}
 	local discovered, err = target_discovery.discover(opts)
@@ -208,7 +243,7 @@ function M.pick_review_target(opts)
 	return require("unified_review.ui.target_picker").open({
 		discovery = discovered,
 		on_select = function(target, item)
-			M.open_target(target, { picker_item = item })
+			M.open_target_with_loading(target, { picker_item = item })
 		end,
 		on_cancel = opts.on_cancel,
 	})
@@ -229,6 +264,13 @@ end
 
 function M.open_pr(number_or_url)
 	return M.open_target(review_target.github_pr({
+		number = tonumber(number_or_url),
+		url = tonumber(number_or_url) and nil or number_or_url,
+	}))
+end
+
+function M.open_pr_local_worktree(number_or_url)
+	return M.open_target(review_target.github_pr_local_worktree({
 		number = tonumber(number_or_url),
 		url = tonumber(number_or_url) and nil or number_or_url,
 	}))
@@ -402,9 +444,8 @@ function M.set_thread_state(thread_id, thread_state)
 	if not session then
 		return nil, { message = "No active review session" }
 	end
-	thread_id = thread_id or (selection.current_thread(session) or {}).id
 	if not thread_id then
-		return nil, { message = "No thread selected" }
+		return nil, { message = "No thread id provided" }
 	end
 	local thread, err = comments_for(session).resolve_thread(session, thread_id, thread_state)
 	if not thread then
@@ -478,17 +519,25 @@ function M.toggle_thread_export(thread_id)
 	if not session then
 		return nil, { message = "No active review session" }
 	end
-	thread_id = thread_id or (selection.current_thread(session) or {}).id
 	if not thread_id then
-		return nil, { message = "No thread selected" }
+		return nil, { message = "No thread id provided" }
 	end
 	for _, thread in ipairs(session.threads or {}) do
 		if thread.id == thread_id then
 			review_thread.toggle_exported(thread)
 			pcall(require("unified_review.persist.session_store").write, session)
 			refresh_ui(session)
+			local thread_query = require("unified_review.ui.thread_query")
 			local state_label = review_thread.is_exported(thread) and "marked for export" or "unmarked for export"
-			vim.notify("Thread " .. thread_id .. " " .. state_label, vim.log.levels.INFO, { title = "unified-review" })
+			local label = thread_query.target_label(thread.target or {})
+			local first = thread.comments and thread.comments[1]
+			local preview = first and thread_query.preview_text(first) or ""
+			local detail = preview ~= "" and (" · " .. preview) or ""
+			vim.notify(
+				string.format("Thread %s %s [%s]%s", thread_id, state_label, label, detail),
+				vim.log.levels.INFO,
+				{ title = "unified-review" }
+			)
 			return thread, nil
 		end
 	end

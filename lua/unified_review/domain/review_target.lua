@@ -54,6 +54,13 @@ function M.github_pr(opts)
 	return target
 end
 
+function M.github_pr_local_worktree(opts)
+	local target = M.github_pr(opts)
+	target.render_strategy = "local_worktree"
+	target.local_worktree = true
+	return target
+end
+
 function M.local_pr_base(opts)
 	local target = M.local_git(opts)
 	target.kind = "local_pr"

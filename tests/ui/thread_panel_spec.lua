@@ -15,6 +15,15 @@ local function call_normal_map(buf, lhs)
 	return false
 end
 
+local function has_comment_keymap(buf)
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+		if map.rhs == "<Cmd>UnifiedReview comment<CR>" then
+			return true
+		end
+	end
+	return false
+end
+
 local function make_session()
 	return {
 		selection = { file_index = 1, thread_index = 1 },
@@ -68,7 +77,15 @@ describe("thread panel", function()
 		local rendered = text(lines)
 
 		assert.matches("o/v/d/s/a  states", lines[1])
-		assert.are.equal("", lines[2])
+		local summary_row
+		for index, line in ipairs(lines) do
+			if line:match("Threads:") then
+				summary_row = index
+				break
+			end
+		end
+		assert.is_not_nil(summary_row)
+		assert.are.equal("", lines[summary_row - 1])
 		assert.matches("Scope: project", rendered)
 		assert.matches("a%.lua", rendered)
 		assert.matches("b%.lua", rendered)
@@ -357,6 +374,90 @@ describe("thread panel", function()
 		rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
 		assert.matches("consider renaming", rendered)
 		assert.matches("fixed this range", rendered)
+	end)
+
+	it("jumps to a thread after CodeDiff replaces buffers and keeps review keymaps", function()
+		local previous_view = package.loaded["codediff.ui.view"]
+		local previous_lifecycle = package.loaded["codediff.ui.lifecycle"]
+		local tabpage = vim.api.nvim_get_current_tabpage()
+		local right_win = vim.api.nvim_get_current_win()
+		local old_buf = vim.api.nvim_create_buf(false, true)
+		local new_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(old_buf, 0, -1, false, { "old" })
+		vim.api.nvim_buf_set_lines(new_buf, 0, -1, false, { "1", "2", "3", "4", "5", "6", "7" })
+		vim.api.nvim_win_set_buf(right_win, old_buf)
+
+		local lifecycle_state = {
+			left_buf = old_buf,
+			right_buf = old_buf,
+			left_win = nil,
+			right_win = right_win,
+			original_path = "a.lua",
+			modified_path = "a.lua",
+			session = {},
+		}
+		local captured_cfg
+		local captured_auto_scroll
+		package.loaded["codediff.ui.view"] = {
+			update = function(_, cfg, auto_scroll_to_first_hunk)
+				captured_cfg = cfg
+				captured_auto_scroll = auto_scroll_to_first_hunk
+				vim.schedule(function()
+					lifecycle_state.right_buf = new_buf
+					lifecycle_state.modified_path = "b.lua"
+					vim.api.nvim_win_set_buf(right_win, new_buf)
+				end)
+				return true
+			end,
+		}
+		package.loaded["codediff.ui.lifecycle"] = {
+			get_buffers = function()
+				return lifecycle_state.left_buf, lifecycle_state.right_buf
+			end,
+			get_windows = function()
+				return lifecycle_state.left_win, lifecycle_state.right_win
+			end,
+			get_paths = function()
+				return lifecycle_state.original_path, lifecycle_state.modified_path
+			end,
+			get_session = function()
+				return lifecycle_state.session
+			end,
+		}
+
+		local session = {
+			id = "remote-thread-jump",
+			target = { root = "/repo" },
+			selection = { file_index = 1 },
+			files = {
+				{ status = "modified", path = "a.lua", hunks = {} },
+				{ status = "modified", path = "b.lua", hunks = {} },
+			},
+			threads = {
+				{
+					id = "thread-b",
+					state = "open",
+					target = { kind = "line", path = "b.lua", side = "right", line = 7 },
+					comments = { { id = "comment-b", author = "alice", body = "remote comment" } },
+				},
+			},
+			ui = { codediff_tab = tabpage, right_buffer = old_buf, right_window = right_win },
+		}
+		state.set_active(session)
+		assert.is_true(thread_panel.open(session))
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<CR>"))
+
+		local ok = vim.wait(500, function()
+			return vim.api.nvim_get_current_win() == right_win
+				and vim.api.nvim_win_get_cursor(right_win)[1] == 7
+				and has_comment_keymap(new_buf)
+		end, 20)
+
+		package.loaded["codediff.ui.view"] = previous_view
+		package.loaded["codediff.ui.lifecycle"] = previous_lifecycle
+		assert.are.equal("/repo/b.lua", captured_cfg and captured_cfg.modified_path)
+		assert.is_false(captured_auto_scroll)
+		assert.is_true(ok, "expected Enter to focus the refreshed CodeDiff buffer with review keymaps attached")
 	end)
 
 	it("toggles open and close", function()

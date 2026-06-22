@@ -90,6 +90,35 @@ describe("ui signs", function()
 		assert.is_not_nil(by_name.UnifiedReviewExported)
 	end)
 
+	it("does not render stale thread signs in diff buffers", function()
+		local left = vim.api.nvim_create_buf(false, true)
+		local right = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(right, 0, -1, false, { "one", "two" })
+		local session = {
+			ui = { left_buffer = left, right_buffer = right },
+			selection = { file_index = 1 },
+			files = { { path = "a.lua", hunks = {} } },
+			threads = {
+				{
+					state = "stale",
+					target = { kind = "line", path = "a.lua", side = "right", line = 1 },
+					comments = { { body = "gone" } },
+				},
+				{
+					state = "open",
+					is_outdated = true,
+					target = { kind = "line", path = "a.lua", side = "right", line = 2 },
+					comments = { { body = "outdated" } },
+				},
+			},
+		}
+
+		signs.place(session)
+
+		local placed = vim.fn.sign_getplaced(right, { group = "unified_review_threads" })[1].signs
+		assert.are.equal(0, #placed)
+	end)
+
 	it("does not place diff gutter signs", function()
 		local left = vim.api.nvim_create_buf(false, true)
 		local right = vim.api.nvim_create_buf(false, true)

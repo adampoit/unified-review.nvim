@@ -1,5 +1,7 @@
 local commands = require("unified_review.commands")
 local manager = require("unified_review.session.manager")
+local selection = require("unified_review.session.selection")
+local comment_editor = require("unified_review.ui.comment_editor")
 local state = require("unified_review.session.state")
 local config = require("unified_review.config")
 
@@ -11,7 +13,14 @@ describe("command behavior", function()
 	local original_close
 	local original_toggle_thread_export
 	local original_publish_drafts
+	local original_resolve_thread
+	local original_reopen_thread
+	local original_edit_draft
+	local original_delete_draft
+	local original_comment_editor_open
 	local original_notify
+	local original_ui_select
+	local original_current_thread_candidates
 	local notifications
 
 	before_each(function()
@@ -23,7 +32,14 @@ describe("command behavior", function()
 		original_close = manager.close
 		original_toggle_thread_export = manager.toggle_thread_export
 		original_publish_drafts = manager.publish_drafts
+		original_resolve_thread = manager.resolve_thread
+		original_reopen_thread = manager.reopen_thread
+		original_edit_draft = manager.edit_draft
+		original_delete_draft = manager.delete_draft
+		original_comment_editor_open = comment_editor.open
 		original_notify = vim.notify
+		original_ui_select = vim.ui.select
+		original_current_thread_candidates = selection.current_thread_candidates
 		notifications = {}
 		rawset(vim, "notify", function(message, level, opts)
 			table.insert(notifications, { message = message, level = level, opts = opts })
@@ -38,7 +54,14 @@ describe("command behavior", function()
 		rawset(manager, "close", original_close)
 		rawset(manager, "toggle_thread_export", original_toggle_thread_export)
 		rawset(manager, "publish_drafts", original_publish_drafts)
+		rawset(manager, "resolve_thread", original_resolve_thread)
+		rawset(manager, "reopen_thread", original_reopen_thread)
+		rawset(manager, "edit_draft", original_edit_draft)
+		rawset(manager, "delete_draft", original_delete_draft)
+		rawset(comment_editor, "open", original_comment_editor_open)
 		rawset(vim, "notify", original_notify)
+		rawset(vim.ui, "select", original_ui_select)
+		rawset(selection, "current_thread_candidates", original_current_thread_candidates)
 		state.clear_active()
 		config.setup({})
 	end)
@@ -175,6 +198,141 @@ describe("command behavior", function()
 		vim.cmd("UnifiedReview toggle-export thread-1")
 
 		assert.are.equal("thread-1", toggled)
+	end)
+
+	it("UnifiedReview toggle-export toggles the only thread at the cursor", function()
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return { { id = "thread-solo" } }
+		end)
+		local toggled
+		rawset(manager, "toggle_thread_export", function(thread_id)
+			toggled = thread_id
+			return { id = thread_id }, nil
+		end)
+		local select_called = false
+		rawset(vim.ui, "select", function(_, _, on_choice)
+			select_called = true
+			if on_choice then
+				on_choice({ id = "thread-solo" })
+			end
+		end)
+
+		vim.cmd("UnifiedReview toggle-export")
+
+		assert.are.equal("thread-solo", toggled)
+		assert.is_false(select_called)
+	end)
+
+	it("UnifiedReview toggle-export disambiguates overlapping comments at the cursor", function()
+		local candidates = {
+			{ id = "thread-range", target = { kind = "range", path = "a.lua", start_line = 10, line = 15 } },
+			{ id = "thread-single", target = { kind = "line", path = "a.lua", line = 12 } },
+		}
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return candidates
+		end)
+		local toggled
+		rawset(manager, "toggle_thread_export", function(thread_id)
+			toggled = thread_id
+			return { id = thread_id }, nil
+		end)
+		local select_prompt
+		rawset(vim.ui, "select", function(items, opts, on_choice)
+			select_prompt = opts.prompt
+			assert.are.equal(2, #items)
+			-- The user picks the nested single-line comment.
+			on_choice(items[2])
+		end)
+
+		vim.cmd("UnifiedReview toggle-export")
+
+		assert.are.equal("thread-single", toggled)
+		assert.is_true(select_prompt ~= nil and select_prompt:match("which comment") ~= nil)
+	end)
+
+	it("UnifiedReview resolve-thread disambiguates overlapping comments at the cursor", function()
+		local candidates = {
+			{ id = "thread-range" },
+			{ id = "thread-single" },
+		}
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return candidates
+		end)
+		local resolved
+		rawset(manager, "resolve_thread", function(thread_id)
+			resolved = thread_id
+			return { id = thread_id }, nil
+		end)
+		rawset(vim.ui, "select", function(items, _, on_choice)
+			on_choice(items[1])
+		end)
+
+		vim.cmd("UnifiedReview resolve-thread")
+
+		assert.are.equal("thread-range", resolved)
+	end)
+
+	it("UnifiedReview reopen-thread toggles the only thread under the cursor", function()
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return { { id = "thread-solo" } }
+		end)
+		local reopened
+		rawset(manager, "reopen_thread", function(thread_id)
+			reopened = thread_id
+			return { id = thread_id }, nil
+		end)
+
+		vim.cmd("UnifiedReview reopen-thread")
+
+		assert.are.equal("thread-solo", reopened)
+	end)
+
+	it("UnifiedReview reply disambiguates overlapping comments and opens the editor for the choice", function()
+		local candidates = {
+			{ id = "thread-range" },
+			{ id = "thread-single" },
+		}
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return candidates
+		end)
+		local opened
+		rawset(comment_editor, "open", function(opts)
+			opened = opts
+		end)
+		rawset(vim.ui, "select", function(items, _, on_choice)
+			on_choice(items[2])
+		end)
+
+		vim.cmd("UnifiedReview reply")
+
+		assert.are.same({ thread_id = "thread-single" }, opened)
+	end)
+
+	it("UnifiedReview delete-draft disambiguates overlapping comments at the cursor", function()
+		state.set_active({ id = "s", files = {}, threads = {}, ui = {} })
+		rawset(selection, "current_thread_candidates", function()
+			return {
+				{ id = "thread-range", comments = { { id = "comment-range" } } },
+				{ id = "thread-single", comments = { { id = "comment-single" } } },
+			}
+		end)
+		local deleted
+		rawset(manager, "delete_draft", function(comment_id)
+			deleted = comment_id
+			return true, nil
+		end)
+		rawset(vim.ui, "select", function(items, _, on_choice)
+			on_choice(items[2])
+		end)
+
+		vim.cmd("UnifiedReview delete-draft")
+
+		assert.are.equal("comment-single", deleted)
 	end)
 
 	it("UnifiedReview publish-drafts dispatches to the manager", function()

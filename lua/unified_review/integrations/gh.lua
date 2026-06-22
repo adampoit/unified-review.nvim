@@ -6,17 +6,34 @@ local function trim(value)
 	return (value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function run_gh(args, opts)
-	opts = opts or {}
-	local command = opts.command or "gh"
-	local result = jobs.run_sync(command, args, { cwd = opts.cwd, timeout = opts.timeout, stdin = opts.stdin })
-	if not result.ok then
+local function with_message(result)
+	if result and not result.ok then
 		result.message = trim(result.stderr) ~= "" and trim(result.stderr) or "gh command failed"
 	end
 	return result
 end
 
+local function run_gh(args, opts)
+	opts = opts or {}
+	local command = opts.command or "gh"
+	return with_message(jobs.run_sync(command, args, { cwd = opts.cwd, timeout = opts.timeout, stdin = opts.stdin }))
+end
+
+local function run_gh_async(args, opts, callback)
+	opts = opts or {}
+	local command = opts.command or "gh"
+	return jobs.run_async(
+		command,
+		args,
+		{ cwd = opts.cwd, timeout = opts.timeout, stdin = opts.stdin },
+		function(result)
+			callback(with_message(result))
+		end
+	)
+end
+
 M._run_gh = run_gh
+M._run_gh_async = run_gh_async
 
 function M.available(command)
 	return vim.fn.executable(command or "gh") == 1
@@ -91,12 +108,8 @@ function M.pr_for_head(cwd, head, opts)
 	return list[1], nil
 end
 
-function M.list_open_prs(cwd, opts)
-	opts = opts or {}
-	if not M.available(opts.command) then
-		return nil, { message = "gh executable not found" }
-	end
-	local result = run_gh({
+local function pr_list_args(limit)
+	return {
 		"pr",
 		"list",
 		"--state",
@@ -104,13 +117,39 @@ function M.list_open_prs(cwd, opts)
 		"--json",
 		"number,url,baseRefName,headRefName,title,isDraft,author",
 		"--limit",
-		tostring(opts.limit or 50),
-	}, { cwd = cwd, command = opts.command, timeout = opts.timeout })
+		tostring(limit or 50),
+	}
+end
+
+function M.list_open_prs(cwd, opts)
+	opts = opts or {}
+	if not M.available(opts.command) then
+		return nil, { message = "gh executable not found" }
+	end
+	local result = run_gh(pr_list_args(opts.limit), { cwd = cwd, command = opts.command, timeout = opts.timeout })
 	local list, err = decode_json(result)
 	if not list then
 		return nil, err
 	end
 	return list, nil
+end
+
+function M.list_open_prs_async(cwd, opts, callback)
+	opts = opts or {}
+	if not M.available(opts.command) then
+		vim.schedule(function()
+			callback(nil, { message = "gh executable not found" })
+		end)
+		return nil
+	end
+	return run_gh_async(
+		pr_list_args(opts.limit),
+		{ cwd = cwd, command = opts.command, timeout = opts.timeout },
+		function(result)
+			local list, err = decode_json(result)
+			callback(list, err)
+		end
+	)
 end
 
 local function has_pr_identity(pr)
@@ -200,6 +239,15 @@ function M.parse_pr_ref(value)
 	return nil, { message = "Invalid PR reference: " .. value }
 end
 
+local function normalize_repo(repo)
+	repo = repo or {}
+	return {
+		owner = repo.owner and (repo.owner.login or repo.owner.name) or repo.owner,
+		name = repo.name,
+		url = repo.url,
+	}
+end
+
 function M.repo_view(cwd, opts)
 	opts = opts or {}
 	local result = run_gh({ "repo", "view", "--json", "owner,name,url" }, {
@@ -211,12 +259,23 @@ function M.repo_view(cwd, opts)
 	if not repo then
 		return nil, err
 	end
-	return {
-		owner = repo.owner and (repo.owner.login or repo.owner.name) or repo.owner,
-		name = repo.name,
-		url = repo.url,
-	},
-		nil
+	return normalize_repo(repo), nil
+end
+
+function M.repo_view_async(cwd, opts, callback)
+	opts = opts or {}
+	return run_gh_async({ "repo", "view", "--json", "owner,name,url" }, {
+		cwd = cwd,
+		command = opts.command,
+		timeout = opts.timeout,
+	}, function(result)
+		local repo, err = decode_json(result)
+		if not repo then
+			callback(nil, err)
+			return
+		end
+		callback(normalize_repo(repo), nil)
+	end)
 end
 
 local pr_json_fields = table.concat({
@@ -290,6 +349,36 @@ function M.pr_view(cwd, pr_ref, opts)
 	return normalize_pr(pr, ref, repo), nil
 end
 
+function M.pr_view_async(cwd, pr_ref, opts, callback)
+	opts = opts or {}
+	local ref, parse_err = M.parse_pr_ref(pr_ref)
+	if not ref then
+		vim.schedule(function()
+			callback(nil, parse_err)
+		end)
+		return nil
+	end
+	local view_arg = ref.url or tostring(ref.number)
+	return run_gh_async({ "pr", "view", view_arg, "--json", pr_json_fields }, {
+		cwd = cwd,
+		command = opts.command,
+		timeout = opts.timeout,
+	}, function(result)
+		local pr, err = decode_json(result)
+		if not pr then
+			callback(nil, err)
+			return
+		end
+		if ref.owner then
+			callback(normalize_pr(pr, ref, { owner = ref.owner, name = ref.repo }), nil)
+			return
+		end
+		M.repo_view_async(cwd, opts, function(repo)
+			callback(normalize_pr(pr, ref, repo or {}), nil)
+		end)
+	end)
+end
+
 function M.pr_diff(cwd, pr_ref, opts)
 	opts = opts or {}
 	local ref, parse_err = M.parse_pr_ref(pr_ref)
@@ -306,6 +395,29 @@ function M.pr_diff(cwd, pr_ref, opts)
 		return nil, result
 	end
 	return result.stdout or "", nil
+end
+
+function M.pr_diff_async(cwd, pr_ref, opts, callback)
+	opts = opts or {}
+	local ref, parse_err = M.parse_pr_ref(pr_ref)
+	if not ref then
+		vim.schedule(function()
+			callback(nil, parse_err)
+		end)
+		return nil
+	end
+	local diff_arg = ref.url or tostring(ref.number)
+	return run_gh_async({ "pr", "diff", diff_arg, "--patch" }, {
+		cwd = cwd,
+		command = opts.command,
+		timeout = opts.timeout,
+	}, function(result)
+		if not result.ok then
+			callback(nil, result)
+			return
+		end
+		callback(result.stdout or "", nil)
+	end)
 end
 
 function M.graphql(query, variables, opts)

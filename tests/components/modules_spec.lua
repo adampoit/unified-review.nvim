@@ -7,6 +7,7 @@ describe("ui component modules", function()
 		local columns = require("components.columns")
 		local divider = require("components.divider")
 		local line = require("components.line")
+		local loader = require("components.loader")
 		local pad_left = require("components.pad_left")
 		local pad_right = require("components.pad_right")
 		local section = require("components.section")
@@ -22,6 +23,7 @@ describe("ui component modules", function()
 		local nodes = {
 			text.component("body"),
 			line.component({ text.component("row") }),
+			loader.component("Loading", { frame = 1 }),
 			text_line.component("whole row"),
 			blank.component(),
 			badge.component("ok"),
@@ -42,6 +44,7 @@ describe("ui component modules", function()
 			{
 				"text",
 				"line",
+				"loader",
 				"text_line",
 				"blank",
 				"badge",

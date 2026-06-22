@@ -1,5 +1,6 @@
 local provider = require("unified_review.providers.diff.github_pr")
 local diff_builder = require("helpers.diff_builder")
+local git_repo = require("helpers.git_repo")
 
 local patch = diff_builder.diff({
 	diff_builder.file("src/right-longer-replacement.txt", {
@@ -54,6 +55,150 @@ describe("GitHub PR diff provider", function()
 		gh.available = original_available
 		gh.pr_view = original_pr_view
 		gh.pr_diff = original_pr_diff
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("renders GitHub PR comments against the local worktree when requested", function()
+		local gh = require("unified_review.integrations.gh")
+		local original_available = gh.available
+		local original_pr_view = gh.pr_view
+		local original_pr_diff = gh.pr_diff
+		local root = git_repo.create()
+		git_repo.write(root, "a.lua", { "return 1" })
+		git_repo.commit(root, "base")
+		vim.fn.system({ "git", "-C", root, "update-ref", "refs/remotes/origin/main", "HEAD" })
+		git_repo.write(root, "a.lua", { "return 2" })
+		local remote_patch = diff_builder.diff({
+			diff_builder.file("a.lua", {
+				diff_builder.del("return 1", 1),
+				diff_builder.add("return 2", 1),
+			}),
+		}).patch
+		local ok, err = pcall(function()
+			rawset(gh, "available", function()
+				return true
+			end)
+			rawset(gh, "pr_view", function()
+				return {
+					id = "PR_kw123",
+					owner = "acme",
+					repo = "widgets",
+					number = 42,
+					url = "https://github.com/acme/widgets/pull/42",
+					title = "Add widgets",
+					base_ref = "main",
+					head_ref = "feature",
+					base_ref_oid = "baseoid",
+					head_ref_oid = "headoid",
+				},
+					nil
+			end)
+			rawset(gh, "pr_diff", function()
+				return remote_patch, nil
+			end)
+
+			local session = assert(
+				provider.open({ kind = "github_pr", number = 42, cwd = root, render_strategy = "local_worktree" })
+			)
+
+			assert.are.equal("github_pr", session.provider)
+			assert.are.equal("github-local:acme:widgets:42", session.id)
+			assert.is_false(session.editable)
+			assert.is_true(session.read_only)
+			assert.are.equal(
+				vim.loop.fs_realpath(root) or root,
+				vim.loop.fs_realpath(session.target.root) or session.target.root
+			)
+			assert.are.equal("local_worktree", session.target.render_strategy)
+			assert.are.equal("WORKING", session.target.head_oid)
+			assert.are.equal(1, #session.files)
+			assert.are.equal("a.lua", session.files[1].path)
+			assert.are.equal("return 2", session.files[1].hunks[1].lines[2].text)
+			assert.are.equal(1, #session.metadata.github_remote_files)
+		end)
+		gh.available = original_available
+		gh.pr_view = original_pr_view
+		gh.pr_diff = original_pr_diff
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("renders GitHub PR comments against a jj local worktree when requested", function()
+		local gh = require("unified_review.integrations.gh")
+		local original_available = gh.available
+		local original_pr_view = gh.pr_view
+		local original_pr_diff = gh.pr_diff
+		local previous_jj_provider = package.loaded["unified_review.providers.diff.jj_local"]
+		local captured_target
+		local ok, err = pcall(function()
+			rawset(gh, "available", function()
+				return true
+			end)
+			rawset(gh, "pr_view", function()
+				return {
+					id = "PR_kw123",
+					owner = "acme",
+					repo = "widgets",
+					number = 42,
+					url = "https://github.com/acme/widgets/pull/42",
+					title = "Add widgets",
+					base_ref = "main",
+					head_ref = "feature",
+					base_ref_oid = "baseoid",
+					head_ref_oid = "headoid",
+				},
+					nil
+			end)
+			rawset(gh, "pr_diff", function()
+				return patch, nil
+			end)
+			package.loaded["unified_review.providers.diff.jj_local"] = {
+				open = function(target)
+					captured_target = vim.deepcopy(target)
+					return {
+						target = {
+							root = "/workspace",
+							git_root = "/workspace/.jj/repo/store/git",
+							base = target.base,
+							head = target.head,
+							base_oid = "mergebase",
+							head_oid = "working-copy-oid",
+						},
+						files = { { path = "a.lua", hunks = {} } },
+						raw_patch = "diff --git a/a.lua b/a.lua\n",
+					},
+						nil
+				end,
+			}
+
+			local session = assert(provider.open({
+				kind = "github_pr",
+				number = 42,
+				cwd = "/workspace/.jj/repo/store/git",
+				render_strategy = "local_worktree",
+				local_provider = "jj",
+				local_root = "/workspace",
+				local_base = "main@origin",
+				git_root = "/workspace/.jj/repo/store/git",
+			}))
+
+			assert.are.equal("/workspace", captured_target.root)
+			assert.are.equal("main@origin", captured_target.base)
+			assert.are.equal("@", captured_target.head)
+			assert.are.equal("three_dot", captured_target.range_kind)
+			assert.are.equal("github_pr", session.provider)
+			assert.are.equal("local_worktree", session.target.render_strategy)
+			assert.are.equal("/workspace", session.target.root)
+			assert.are.equal("working-copy-oid", session.target.head_oid)
+			assert.are.equal(1, #session.metadata.github_remote_files)
+		end)
+		gh.available = original_available
+		gh.pr_view = original_pr_view
+		gh.pr_diff = original_pr_diff
+		package.loaded["unified_review.providers.diff.jj_local"] = previous_jj_provider
 		if not ok then
 			error(err)
 		end

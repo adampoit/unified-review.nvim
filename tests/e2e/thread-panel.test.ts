@@ -1,11 +1,16 @@
 import { expect, test } from "@microsoft/tui-test";
 import type { Terminal } from "@microsoft/tui-test/lib/terminal/term.js";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { captureTerminal } from "./artifacts.js";
 import { add, ctx, del, diffScenario, file } from "./diffDsl.js";
 import {
   configureNvimTest,
   createRepoFromDiffScenario,
+  createRepoWithFiles,
   delay,
+  luaString,
+  runLua,
   vimEscapePath,
 } from "./helpers.js";
 
@@ -25,6 +30,26 @@ function createReviewGitRepo() {
         add("other_new", ["OTHER_TARGET"]),
       ]),
     ]),
+  );
+}
+
+function numberedLines(prefix: string, count: number) {
+  return Array.from({ length: count }, (_, index) => `${prefix}_${index + 1}`);
+}
+
+function createThreadJumpRepo() {
+  const beforeA = numberedLines("A_BASE", 30);
+  const afterA = [...beforeA];
+  afterA[4] = "A_CHANGED_FIRST_FILE";
+
+  const beforeB = numberedLines("B_BASE", 120);
+  const afterB = [...beforeB];
+  afterB[9] = "B_CHANGED_FIRST_HUNK";
+  afterB[79] = "B_CHANGED_TARGET_LINE";
+
+  return createRepoWithFiles(
+    { "src/a.txt": beforeA, "src/b.txt": beforeB },
+    { "src/a.txt": afterA, "src/b.txt": afterB },
   );
 }
 
@@ -164,6 +189,61 @@ test("thread panel supports resolve, reopen, delete, filtering, and jump", async
   await expect(
     terminal.getByText("rename t", { strict: false }),
   ).not.toBeVisible();
+});
+
+test("thread panel jump to another file is not overridden by CodeDiff first-hunk scroll", async ({
+  terminal,
+}) => {
+  const repo = createThreadJumpRepo();
+  await expect(terminal.getByText("UNIFIED_REVIEW_E2E_READY")).toBeVisible();
+  terminal.write(`:cd ${vimEscapePath(repo)}\r`);
+  terminal.write(":UnifiedReview local HEAD~1..HEAD\r");
+  await expect(terminal.getByText(/Loaded [0-9]+ changed file/g)).toBeVisible();
+  terminal.write("\r");
+  await expect(
+    terminal.getByText("A_CHANGED_FIRST_FILE", { strict: false }),
+  ).toBeVisible();
+  await delay(500);
+  terminal.write("\r");
+  await delay(250);
+  terminal.write("\u001c\u000e");
+  await delay(100);
+
+  const setupScript = join(repo, "setup-thread.lua");
+  writeFileSync(
+    setupScript,
+    [
+      "local session = require('unified_review.session.state').get_active()",
+      "session.threads = {{",
+      "  id = 'thread-e2e-jump',",
+      "  state = 'open',",
+      "  target = { kind = 'line', path = 'src/b.txt', side = 'right', line = 80 },",
+      `  comments = {{ body = ${luaString("jump target e2e body")} }},`,
+      "}}",
+      "session._thread_selected_id = 'thread-e2e-jump'",
+      "session._thread_selected_key = 'thread:thread-e2e-jump'",
+      "vim.schedule(function() require('unified_review.ui.thread_panel').open(session) end)",
+    ].join("\n"),
+  );
+  terminal.write(`:luafile ${vimEscapePath(setupScript)}\r`);
+  await delay(200);
+  terminal.write("\r");
+  await delay(100);
+  await expect(
+    terminal.getByText("jump target", { strict: false }),
+  ).toBeVisible();
+
+  terminal.write("\r");
+  await expect(
+    terminal.getByText("B_CHANGED_TARGET_LINE", { strict: false }),
+  ).toBeVisible();
+  await delay(1000);
+
+  runLua(
+    terminal,
+    "local session = require('unified_review.session.state').get_active(); vim.notify('E2E_THREAD_JUMP_CURSOR:' .. tostring(vim.api.nvim_win_get_cursor(session.ui.right_window)[1]))",
+  );
+  await expect(terminal.getByText("E2E_THREAD_JUMP_CURSOR:80")).toBeVisible();
 });
 
 test("summary copy and save are driven through the real summary UI", async ({

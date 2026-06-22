@@ -166,15 +166,40 @@ describe("session selection", function()
 				{ id = "thread-2", target = { kind = "line", path = "a.lua", line = 9 } },
 			},
 		}
-		assert.are.equal(
-			"thread-1",
-			selection.thread_at_target(session, { kind = "line", path = "a.lua", line = 5 }).id
+		local function first_at_target(target)
+			return selection.threads_at_target(session, target)[1]
+		end
+		assert.are.equal("thread-1", first_at_target({ kind = "line", path = "a.lua", line = 5 }).id)
+		assert.are.equal("thread-2", first_at_target({ kind = "line", path = "a.lua", line = 9 }).id)
+		assert.is_nil(first_at_target({ kind = "line", path = "a.lua", line = 7 }))
+	end)
+
+	it("surfaces all overlapping threads at a target", function()
+		-- A multiline range comment and a single-line comment nested inside it.
+		local session = {
+			files = { { path = "a.lua", hunks = {} } },
+			threads = {
+				{ id = "thread-range", target = { kind = "range", path = "a.lua", start_line = 10, line = 15 } },
+				{ id = "thread-single", target = { kind = "line", path = "a.lua", line = 12 } },
+			},
+		}
+
+		local outer = selection.threads_at_target(session, { kind = "line", path = "a.lua", line = 10 })
+		assert.are.same(
+			{ "thread-range" },
+			vim.tbl_map(function(t)
+				return t.id
+			end, outer)
 		)
-		assert.are.equal(
-			"thread-2",
-			selection.thread_at_target(session, { kind = "line", path = "a.lua", line = 9 }).id
+
+		-- Line 12 sits inside the range AND matches the single-line thread.
+		local overlapping = selection.threads_at_target(session, { kind = "line", path = "a.lua", line = 12 })
+		assert.are.same(
+			{ "thread-range", "thread-single" },
+			vim.tbl_map(function(t)
+				return t.id
+			end, overlapping)
 		)
-		assert.is_nil(selection.thread_at_target(session, { kind = "line", path = "a.lua", line = 7 }))
 	end)
 
 	it("navigates current-file threads", function()

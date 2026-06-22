@@ -8,8 +8,9 @@ local M = {}
 
 local function opts_for(session)
 	local github_cfg = require("unified_review.config").options.github or {}
+	local target = session and session.target or {}
 	return {
-		cwd = session and session.target and session.target.root,
+		cwd = target.source_root or target.cwd or target.root,
 		command = github_cfg.transport_command,
 		timeout = github_cfg.timeout,
 	}
@@ -53,6 +54,248 @@ end
 
 local function has_local_drafts(thread)
 	return has_drafts(thread, { local_only = true })
+end
+
+local function is_local_worktree_session(session)
+	local target = session and session.target or {}
+	local metadata = session and session.metadata or {}
+	return target.render_strategy == "local_worktree"
+		or target.local_worktree == true
+		or metadata.render_strategy == "local_worktree"
+end
+
+local function remote_diff_files(session)
+	local metadata = session and session.metadata or {}
+	if is_local_worktree_session(session) then
+		return metadata.github_remote_files or {}
+	end
+	return session and session.files or {}
+end
+
+local function find_remote_file(session, path)
+	for _, file in ipairs(remote_diff_files(session)) do
+		if file.path == path or file.old_path == path then
+			return file
+		end
+	end
+	return nil
+end
+
+local function find_local_file(session, path)
+	for _, file in ipairs((session and session.files) or {}) do
+		if file.path == path or file.old_path == path then
+			return file
+		end
+	end
+	return nil
+end
+
+local function remote_line_text(file, side, line_number)
+	if not file or not side or not line_number then
+		return nil
+	end
+	for _, hunk in ipairs(file.hunks or {}) do
+		for _, line in ipairs(hunk.lines or {}) do
+			if side == "left" and line.kind ~= "added" and line.old_line == line_number then
+				return line.text
+			end
+			if side ~= "left" and line.kind ~= "deleted" and line.new_line == line_number then
+				return line.text
+			end
+		end
+	end
+	return nil
+end
+
+local function target_remote_text(session, target)
+	if not target or target.kind == "file" then
+		return nil, { message = "GitHub file-level PR comments are not supported by the GraphQL review thread API" }
+	end
+	local file = find_remote_file(session, target.path)
+	if not file then
+		return nil, { message = "`" .. tostring(target.path) .. "` is not present in the remote PR diff yet" }
+	end
+	local side = target.side or target.start_side or "right"
+	local start_line = target.start_line or target.line
+	local end_line = target.line or target.start_line
+	if not start_line or not end_line then
+		return nil, { message = "comment target line is required" }
+	end
+	start_line, end_line = math.min(start_line, end_line), math.max(start_line, end_line)
+	local lines = {}
+	for line_number = start_line, end_line do
+		local text = remote_line_text(file, side, line_number)
+		if text == nil then
+			return nil,
+				{
+					message = string.format(
+						"%s:%d (%s side) is not present in the remote PR diff yet",
+						tostring(target.path),
+						line_number,
+						side == "left" and "left" or "right"
+					),
+				}
+		end
+		table.insert(lines, text)
+	end
+	return lines, nil
+end
+
+local function validate_local_worktree_thread(session, thread)
+	if not is_local_worktree_session(session) or is_remote_thread(thread) then
+		return true, nil
+	end
+	local lines, err = target_remote_text(session, thread.target)
+	if not lines then
+		return nil, err
+	end
+	local anchor = thread.metadata and thread.metadata.anchor
+	local selected = anchor and anchor.selected
+	local side = thread.target and (thread.target.side or thread.target.start_side)
+	if selected and side ~= "left" and #selected == #lines then
+		for index, text in ipairs(selected) do
+			if text ~= lines[index] then
+				return nil,
+					{
+						message = string.format(
+							"%s:%d is local-only or differs from the remote PR diff; push the change before publishing this draft",
+							tostring(thread.target.path),
+							thread.target.start_line or thread.target.line or 0
+						),
+					}
+			end
+		end
+	end
+	return true, nil
+end
+
+local function local_line_map(file, side)
+	local lines = {}
+	for _, hunk in ipairs((file and file.hunks) or {}) do
+		for _, line in ipairs(hunk.lines or {}) do
+			if side == "left" and line.kind ~= "added" and line.old_line then
+				lines[line.old_line] = line.text
+			elseif side ~= "left" and line.kind ~= "deleted" and line.new_line then
+				lines[line.new_line] = line.text
+			end
+		end
+	end
+	return lines
+end
+
+local function mapped_lines_match(lines, start_line, selected)
+	if not start_line then
+		return false
+	end
+	for offset, text in ipairs(selected or {}) do
+		if lines[start_line + offset - 1] ~= text then
+			return false
+		end
+	end
+	return true
+end
+
+local function find_local_matches(lines, selected)
+	local matches = {}
+	if not selected or #selected == 0 then
+		return matches
+	end
+	for start_line in pairs(lines or {}) do
+		if mapped_lines_match(lines, start_line, selected) then
+			table.insert(matches, start_line)
+		end
+	end
+	table.sort(matches)
+	return matches
+end
+
+local function thread_github_outdated(thread)
+	local github = thread and thread.metadata and thread.metadata.github
+	return github and github.isOutdated == true
+end
+
+local function apply_local_thread_target(thread, start_line, count)
+	local target = thread.target or {}
+	count = count or 1
+	if count == 1 and target.kind == "line" then
+		target.line = start_line
+	else
+		target.kind = "range"
+		target.start_line = start_line
+		target.line = start_line + count - 1
+		target.start_side = target.start_side or target.side
+	end
+	thread.target = target
+	thread.metadata = thread.metadata or {}
+	thread.metadata.local_outdated = false
+	if not thread_github_outdated(thread) then
+		thread.is_outdated = false
+		if thread.state == "stale" then
+			thread.state = "open"
+		end
+	end
+	for _, comment in ipairs(thread.comments or {}) do
+		comment.target = target
+	end
+end
+
+local function mark_local_thread_stale(thread)
+	thread.metadata = thread.metadata or {}
+	thread.metadata.local_outdated = true
+	thread.is_outdated = true
+	if thread.state == "open" then
+		thread.state = "stale"
+	end
+end
+
+local function reconcile_remote_thread_with_local(session, thread)
+	if not is_local_worktree_session(session) or not is_remote_thread(thread) then
+		return
+	end
+	local target = thread.target
+	if not target or target.kind == "file" then
+		return
+	end
+	local selected = target_remote_text(session, target)
+	if not selected or #selected == 0 then
+		mark_local_thread_stale(thread)
+		return
+	end
+	local file = find_local_file(session, target.path)
+	if not file then
+		mark_local_thread_stale(thread)
+		return
+	end
+	local side = target.side or target.start_side or "right"
+	local start_line = target.start_line or target.line
+	local lines = local_line_map(file, side)
+	if mapped_lines_match(lines, start_line, selected) then
+		apply_local_thread_target(thread, start_line, #selected)
+		return
+	end
+	local matches = find_local_matches(lines, selected)
+	if #matches == 1 then
+		apply_local_thread_target(thread, matches[1], #selected)
+		return
+	end
+	mark_local_thread_stale(thread)
+end
+
+local function reconcile_remote_threads_with_local(session, threads)
+	if not is_local_worktree_session(session) then
+		return threads
+	end
+	for _, thread in ipairs(threads or {}) do
+		reconcile_remote_thread_with_local(session, thread)
+	end
+	return threads
+end
+
+local function local_worktree_publish_error(err)
+	return {
+		message = (err and err.message or "draft target is not present in the remote PR diff")
+			.. "; push or update the PR, refresh the review, then publish drafts",
+	}
 end
 
 local function ensure_pending_review(session)
@@ -164,7 +407,7 @@ function M.load(session)
 		return nil, err
 	end
 	apply_persisted_export_marks(session, threads)
-	session.threads = merge_persisted_drafts(session, threads)
+	session.threads = reconcile_remote_threads_with_local(session, merge_persisted_drafts(session, threads))
 	local data = persisted_session(session)
 	if data and data.session and data.session.metadata then
 		session.metadata = vim.tbl_deep_extend("force", session.metadata or {}, data.session.metadata)
@@ -183,9 +426,21 @@ function M.list_threads(session, path)
 end
 
 function M.create_thread(session, target, body)
-	local thread, err = local_store.create_thread(session, target, body, { metadata = { export = true } })
+	local metadata = { export = true }
+	if is_local_worktree_session(session) then
+		metadata.github_local_worktree = true
+		metadata.publish_note = "This draft can publish only after its target line exists in the remote PR diff."
+	end
+	local thread, err = local_store.create_thread(session, target, body, { metadata = metadata })
 	if not thread then
 		return nil, err
+	end
+	if is_local_worktree_session(session) then
+		vim.notify(
+			"Created a local-worktree PR draft. It can publish after the matching code is pushed to the PR.",
+			vim.log.levels.INFO,
+			{ title = "unified-review" }
+		)
 	end
 	return thread, nil
 end
@@ -291,6 +546,12 @@ function M.publish_drafts(session)
 	end
 	if #candidates == 0 then
 		return nil, { message = "No exported draft comments to publish" }
+	end
+	for _, candidate in ipairs(candidates) do
+		local ok, publish_err = validate_local_worktree_thread(session, candidate.thread)
+		if not ok then
+			return nil, local_worktree_publish_error(publish_err)
+		end
 	end
 	local review_id, review_err = ensure_pending_review(session)
 	if not review_id then

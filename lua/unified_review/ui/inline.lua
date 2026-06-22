@@ -161,7 +161,7 @@ local function has_draft_comment(thread)
 end
 
 local function thread_state(thread)
-	if thread.state == "stale" or thread.is_outdated then
+	if review_thread.is_stale(thread) then
 		return "stale"
 	end
 	if has_draft_comment(thread) then
@@ -839,15 +839,17 @@ function M.place(session)
 	session._inline_visible = true
 	local placements = { items = {}, by_key = {} }
 	for _, thread in ipairs(session.threads or {}) do
-		local target = thread.target or {}
-		if current_file_matches(session, target) then
-			local side = target.side or target.start_side or "right"
-			local buf = buffer_for_side(session, side)
-			if buf and vim.api.nvim_buf_is_valid(buf) then
-				local line = anchor_line_for_target(target)
-				local line_count = vim.api.nvim_buf_line_count(buf)
-				if target.kind == "file" or (line > 0 and line <= line_count) then
-					add_placement(placements, anchor_for_target(session, target), side, thread)
+		if not review_thread.is_stale(thread) then
+			local target = thread.target or {}
+			if current_file_matches(session, target) then
+				local side = target.side or target.start_side or "right"
+				local buf = buffer_for_side(session, side)
+				if buf and vim.api.nvim_buf_is_valid(buf) then
+					local line = anchor_line_for_target(target)
+					local line_count = vim.api.nvim_buf_line_count(buf)
+					if target.kind == "file" or (line > 0 and line <= line_count) then
+						add_placement(placements, anchor_for_target(session, target), side, thread)
+					end
 				end
 			end
 		end

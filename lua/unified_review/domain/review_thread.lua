@@ -27,6 +27,10 @@ function M.new(opts)
 	}
 end
 
+function M.is_stale(thread)
+	return thread ~= nil and (thread.state == "stale" or thread.is_outdated == true)
+end
+
 function M.is_exported(thread)
 	local metadata = thread and thread.metadata or {}
 	if metadata.export ~= nil then

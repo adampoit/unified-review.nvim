@@ -112,6 +112,24 @@ describe("session manager", function()
 		assert.is_true(assert(manager.toggle_thread_export(thread.id)).metadata.export)
 	end)
 
+	it("requires an explicit thread id to toggle export rather than guessing at the cursor", function()
+		active_session()
+		assert(manager.create_comment("note", { kind = "file", path = "a.lua" }))
+
+		local _, err = manager.toggle_thread_export(nil)
+		assert.is_not_nil(err)
+		assert.matches("No thread id provided", (err or {}).message or "")
+	end)
+
+	it("requires an explicit thread id to resolve rather than guessing at the cursor", function()
+		active_session()
+		assert(manager.create_comment("note", { kind = "file", path = "a.lua" }))
+
+		local _, err = manager.resolve_thread(nil)
+		assert.is_not_nil(err)
+		assert.matches("No thread id provided", (err or {}).message or "")
+	end)
+
 	it("clears comments through the active session", function()
 		active_session()
 		assert(manager.create_comment("note", { kind = "file", path = "a.lua" }))

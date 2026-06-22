@@ -85,6 +85,7 @@ local function add_github_pr_item(items, root, pr, opts)
 	if not pr or not (pr.number or pr.url) then
 		return
 	end
+	local cwd = opts.cwd or root
 	table.insert(
 		items,
 		item({
@@ -93,8 +94,8 @@ local function add_github_pr_item(items, root, pr, opts)
 			description = pr.title or "Open the pull request review without checking it out",
 			badge = "pr",
 			target = review_target.github_pr({
-				cwd = opts.cwd or root,
-				root = opts.cwd or root,
+				cwd = cwd,
+				root = cwd,
 				number = pr.number,
 				url = pr.url,
 				title = pr.title,
@@ -107,6 +108,33 @@ local function add_github_pr_item(items, root, pr, opts)
 			},
 		})
 	)
+	if opts.include_local_worktree and cwd then
+		table.insert(
+			items,
+			item({
+				id = (opts.id or "github-pr") .. "-local",
+				label = string.format("Review GitHub PR #%s with local changes", tostring(pr.number or "?")),
+				description = "Load GitHub review comments while rendering your local worktree on the right",
+				badge = "pr",
+				target = review_target.github_pr_local_worktree({
+					cwd = cwd,
+					root = cwd,
+					local_provider = opts.local_provider,
+					local_root = opts.local_root,
+					git_root = opts.git_root,
+					number = pr.number,
+					url = pr.url,
+					title = pr.title,
+					raw_head = "local worktree",
+					raw_base = pr.base_name,
+				}),
+				summary_lines = {
+					string.format("GitHub PR: %s", pr.url or ("#" .. tostring(pr.number))),
+					"Right side: local worktree (drafts publish only after matching remote PR lines exist)",
+				},
+			})
+		)
+	end
 end
 
 local function discover_pr_for_git(root, head_ref)
@@ -123,6 +151,10 @@ local function append_meta_items(items, mode, root, opts)
 		add_github_pr_item(items, root, opts.inferred_pr, {
 			id = opts.inferred_pr_id,
 			cwd = opts.github_cwd,
+			include_local_worktree = opts.include_local_worktree ~= false,
+			local_provider = opts.local_provider,
+			local_root = opts.local_root,
+			git_root = opts.git_root,
 		})
 	end
 	local ok_gh, gh = pcall(require, "unified_review.integrations.gh")
@@ -376,12 +408,14 @@ local function discover_jj(cwd)
 		end
 	end
 	local inferred_pr = discover_pr_for_jj(jj, root, git_root)
-	append_meta_items(
-		items,
-		"jj",
-		root,
-		{ inferred_pr = inferred_pr, inferred_pr_id = "jj-github-pr", github_cwd = git_root or root }
-	)
+	append_meta_items(items, "jj", root, {
+		inferred_pr = inferred_pr,
+		inferred_pr_id = "jj-github-pr",
+		github_cwd = git_root or root,
+		local_provider = "jj",
+		local_root = root,
+		git_root = git_root,
+	})
 	return {
 		mode = "jj",
 		provider = "jj",
@@ -568,17 +602,7 @@ function M.normalize_github_pr(input, opts)
 		nil
 end
 
-function M.open_pull_requests(opts)
-	opts = opts or {}
-	local ok_gh, gh = pcall(require, "unified_review.integrations.gh")
-	if not ok_gh then
-		return nil, { message = "GitHub integration failed to load" }
-	end
-	local cwd = opts.cwd or opts.root or vim.fn.getcwd()
-	local prs, err = gh.list_open_prs(cwd, { command = config.options.github.transport_command, limit = opts.limit })
-	if not prs then
-		return nil, err
-	end
+local function normalize_open_pull_requests(prs, cwd)
 	local result = {}
 	for _, pr in ipairs(prs or {}) do
 		local author = pr.author and pr.author.login or pr.author
@@ -601,7 +625,58 @@ function M.open_pull_requests(opts)
 			}),
 		})
 	end
-	return result, nil
+	return result
+end
+
+local function open_pull_requests_default(opts)
+	opts = opts or {}
+	local ok_gh, gh = pcall(require, "unified_review.integrations.gh")
+	if not ok_gh then
+		return nil, { message = "GitHub integration failed to load" }
+	end
+	local cwd = opts.cwd or opts.root or vim.fn.getcwd()
+	local prs, err = gh.list_open_prs(cwd, { command = config.options.github.transport_command, limit = opts.limit })
+	if not prs then
+		return nil, err
+	end
+	return normalize_open_pull_requests(prs, cwd), nil
+end
+
+M.open_pull_requests = open_pull_requests_default
+
+function M.open_pull_requests_async(opts, callback)
+	opts = opts or {}
+	if M.open_pull_requests ~= open_pull_requests_default then
+		vim.schedule(function()
+			callback(M.open_pull_requests(opts))
+		end)
+		return nil
+	end
+	local ok_gh, gh = pcall(require, "unified_review.integrations.gh")
+	if not ok_gh then
+		vim.schedule(function()
+			callback(nil, { message = "GitHub integration failed to load" })
+		end)
+		return nil
+	end
+	local cwd = opts.cwd or opts.root or vim.fn.getcwd()
+	if type(gh.list_open_prs_async) ~= "function" then
+		vim.schedule(function()
+			callback(M.open_pull_requests(opts))
+		end)
+		return nil
+	end
+	return gh.list_open_prs_async(
+		cwd,
+		{ command = config.options.github.transport_command, limit = opts.limit },
+		function(prs, err)
+			if not prs then
+				callback(nil, err)
+				return
+			end
+			callback(normalize_open_pull_requests(prs, cwd), nil)
+		end
+	)
 end
 
 function M.normalize_custom(input, opts)

@@ -1,5 +1,7 @@
 local provider = require("unified_review.providers.comments.github_review")
 local session_store = require("unified_review.persist.session_store")
+local diff_builder = require("helpers.diff_builder")
+local parser = require("unified_review.util.patch_parse")
 
 local function temp_session(extra)
 	local root = vim.fn.tempname()
@@ -42,6 +44,51 @@ describe("GitHub review comment provider", function()
 		end)
 		graphql.create_pending_review = original_create
 		graphql.add_thread = original_add
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("blocks local-worktree PR drafts until their target exists in the remote PR diff", function()
+		local graphql = require("unified_review.integrations.github_graphql")
+		local original_create = graphql.create_pending_review
+		local called_remote = false
+		local remote_patch = diff_builder.diff({
+			diff_builder.file("a.lua", {
+				diff_builder.del("return 1", 1),
+				diff_builder.add("return 2", 1),
+			}),
+		}).patch
+		local ok, err = pcall(function()
+			rawset(graphql, "create_pending_review", function()
+				called_remote = true
+				return "review1", nil
+			end)
+			local session = temp_session({
+				target = { root = vim.fn.tempname(), render_strategy = "local_worktree", pull_request_id = "pr1" },
+				metadata = { render_strategy = "local_worktree", github_remote_files = parser.parse(remote_patch) },
+			})
+			vim.fn.mkdir(session.target.root, "p")
+			vim.fn.writefile({ "return 2", "return 3" }, session.target.root .. "/a.lua")
+			assert(
+				provider.create_thread(
+					session,
+					{ kind = "line", path = "a.lua", side = "right", line = 2 },
+					"local only"
+				)
+			)
+
+			local result, publish_err = provider.publish_drafts(session)
+
+			assert.is_nil(result)
+			assert.is_false(called_remote)
+			if not publish_err then
+				error("expected publish error")
+			end
+			assert.matches("not present in the remote PR diff", publish_err.message)
+			assert.matches("push or update the PR", publish_err.message)
+		end)
+		graphql.create_pending_review = original_create
 		if not ok then
 			error(err)
 		end
@@ -178,6 +225,100 @@ describe("GitHub review comment provider", function()
 			assert.is_not_nil(threads[2].comments[1].metadata.github)
 			assert.are.equal("local-thread", threads[3].id)
 			assert.are.equal("draft", threads[3].comments[1].state)
+		end)
+		graphql.fetch_review_threads = original_fetch
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("remaps remote PR threads against a local-worktree diff", function()
+		local graphql = require("unified_review.integrations.github_graphql")
+		local original_fetch = graphql.fetch_review_threads
+		local ok, err = pcall(function()
+			rawset(graphql, "fetch_review_threads", function()
+				return {
+					{
+						id = "remote-thread1",
+						state = "open",
+						metadata = { github = { id = "remote-thread1", isOutdated = false } },
+						target = { kind = "line", path = "a.lua", side = "right", line = 2 },
+						comments = {
+							{ id = "remote-comment1", body = "remote", state = "remote", target = { path = "a.lua" } },
+						},
+					},
+				},
+					nil
+			end)
+			local session = temp_session({
+				target = { root = vim.fn.tempname(), render_strategy = "local_worktree", pull_request_id = "pr1" },
+				metadata = {
+					render_strategy = "local_worktree",
+					github_remote_files = {
+						{
+							path = "a.lua",
+							hunks = { { lines = { { kind = "added", new_line = 2, text = "target" } } } },
+						},
+					},
+				},
+				files = {
+					{ path = "a.lua", hunks = { { lines = { { kind = "added", new_line = 3, text = "target" } } } } },
+				},
+			})
+
+			local threads = assert(provider.load(session))
+
+			assert.are.equal(3, threads[1].target.line)
+			assert.are.equal(3, threads[1].comments[1].target.line)
+			assert.is_false(threads[1].is_outdated)
+			assert.is_false(threads[1].metadata.local_outdated)
+		end)
+		graphql.fetch_review_threads = original_fetch
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("marks remote PR threads stale when they do not match the local-worktree diff", function()
+		local graphql = require("unified_review.integrations.github_graphql")
+		local original_fetch = graphql.fetch_review_threads
+		local ok, err = pcall(function()
+			rawset(graphql, "fetch_review_threads", function()
+				return {
+					{
+						id = "remote-thread1",
+						state = "open",
+						metadata = { github = { id = "remote-thread1", isOutdated = false } },
+						target = { kind = "line", path = "a.lua", side = "right", line = 2 },
+						comments = { { id = "remote-comment1", body = "remote", state = "remote" } },
+					},
+				},
+					nil
+			end)
+			local session = temp_session({
+				target = { root = vim.fn.tempname(), render_strategy = "local_worktree", pull_request_id = "pr1" },
+				metadata = {
+					render_strategy = "local_worktree",
+					github_remote_files = {
+						{
+							path = "a.lua",
+							hunks = { { lines = { { kind = "added", new_line = 2, text = "target" } } } },
+						},
+					},
+				},
+				files = {
+					{
+						path = "a.lua",
+						hunks = { { lines = { { kind = "added", new_line = 2, text = "different" } } } },
+					},
+				},
+			})
+
+			local threads = assert(provider.load(session))
+
+			assert.are.equal("stale", threads[1].state)
+			assert.is_true(threads[1].is_outdated)
+			assert.is_true(threads[1].metadata.local_outdated)
 		end)
 		graphql.fetch_review_threads = original_fetch
 		if not ok then

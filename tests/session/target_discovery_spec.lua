@@ -1,7 +1,7 @@
 local config = require("unified_review.config")
 local discovery = require("unified_review.session.target_discovery")
-local git_repo = require("tests.helpers.git_repo")
-local jj_repo = require("tests.helpers.jj_repo")
+local git_repo = require("helpers.git_repo")
+local jj_repo = require("helpers.jj_repo")
 
 local function run(root, args)
 	local result = vim.system(vim.list_extend({ "git", "-C", root }, args), { text = true }):wait()
@@ -89,7 +89,7 @@ describe("target discovery", function()
 		assert.are.equal("working_tree", items["git-origin/main-two-dot"].target.range_kind)
 	end)
 
-	it("adds only an inferred GitHub PR target next to the PR picker", function()
+	it("adds inferred GitHub PR targets next to the PR picker", function()
 		local root = git_repo.create()
 		git_repo.write(root, "a.lua", { "return 1" })
 		git_repo.commit(root, "base")
@@ -112,7 +112,9 @@ describe("target discovery", function()
 		assert.is_not_nil(github_item)
 		assert.are.equal("github_pr", github_item.target.kind)
 		assert.are.equal(7, github_item.target.number)
-		assert.are.equal(item_index(result.items, "github-pr") + 1, item_index(result.items, "github-pr-picker"))
+		assert.is_not_nil(items["github-pr-local"])
+		assert.are.equal("local_worktree", items["github-pr-local"].target.render_strategy)
+		assert.are.equal(item_index(result.items, "github-pr-local") + 1, item_index(result.items, "github-pr-picker"))
 		assert.is_nil(items["pr-base"])
 	end)
 
@@ -231,7 +233,18 @@ describe("target discovery", function()
 		assert.is_not_nil(github_item)
 		assert.are.equal("github_pr", github_item.target.kind)
 		assert.are.equal(9, github_item.target.number)
-		assert.are.equal(item_index(result.items, "jj-github-pr") + 1, item_index(result.items, "github-pr-picker"))
+		assert.is_not_nil(items["jj-github-pr-local"])
+		assert.are.equal("local_worktree", items["jj-github-pr-local"].target.render_strategy)
+		assert.are.equal("jj", items["jj-github-pr-local"].target.local_provider)
+		assert.are.equal(
+			vim.loop.fs_realpath(root) or root,
+			vim.loop.fs_realpath(items["jj-github-pr-local"].target.local_root)
+				or items["jj-github-pr-local"].target.local_root
+		)
+		assert.are.equal(
+			item_index(result.items, "jj-github-pr-local") + 1,
+			item_index(result.items, "github-pr-picker")
+		)
 		assert.is_nil(items["jj-pr-base"])
 	end)
 
@@ -264,6 +277,14 @@ describe("target discovery", function()
 		assert.are.equal("feature-bookmark", requested_head)
 		assert.is_not_nil(items["jj-github-pr"])
 		assert.are.equal("github_pr", items["jj-github-pr"].target.kind)
+		assert.is_not_nil(items["jj-github-pr-local"])
+		assert.are.equal("local_worktree", items["jj-github-pr-local"].target.render_strategy)
+		assert.are.equal("jj", items["jj-github-pr-local"].target.local_provider)
+		assert.are.equal(
+			vim.loop.fs_realpath(root) or root,
+			vim.loop.fs_realpath(items["jj-github-pr-local"].target.local_root)
+				or items["jj-github-pr-local"].target.local_root
+		)
 		assert.is_nil(items["jj-pr-base"])
 	end)
 

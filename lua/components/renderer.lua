@@ -1,3 +1,5 @@
+local loader = require("components.loader")
+
 local M = {}
 
 local function is_component(value)
@@ -336,6 +338,18 @@ flatten_inline = function(node, state, opts)
 		flatten_children(node.children, state, vim.tbl_extend("force", opts, node.opts or {}))
 	elseif node.kind == "text_line" then
 		append_text(state, node.value, node.hl)
+	elseif node.kind == "loader" then
+		local spinner = loader.spinner(node.frame or opts.loader_frame, node.frames or opts.loader_frames)
+		local separator = node.separator == nil and " " or node.separator
+		if node.position == "suffix" then
+			append_text(state, node.label, node.hl)
+			append_text(state, separator)
+			append_text(state, spinner, node.spinner_hl or node.hl)
+		else
+			append_text(state, spinner, node.spinner_hl or node.hl)
+			append_text(state, separator)
+			append_text(state, node.label, node.hl)
+		end
 	elseif node.kind == "blank" then
 		return
 	else

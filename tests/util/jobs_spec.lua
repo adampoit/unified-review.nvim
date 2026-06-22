@@ -14,4 +14,17 @@ describe("jobs", function()
 		assert.are.equal(127, result.code)
 		assert.matches("executable not found", result.stderr)
 	end)
+
+	it("runs commands asynchronously", function()
+		local async_result
+		jobs.run_async("printf", { "hello" }, function(result)
+			async_result = result
+		end)
+
+		assert.is_true(vim.wait(1000, function()
+			return async_result ~= nil
+		end))
+		assert.is_true(async_result.ok)
+		assert.are.equal("hello", async_result.stdout)
+	end)
 end)

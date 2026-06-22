@@ -6,6 +6,7 @@ local selection = require("unified_review.session.selection")
 local state = require("unified_review.session.state")
 local threads = require("unified_review.ui.thread_query")
 local tree = require("components.tree")
+local debug = require("unified_review.util.debug")
 
 local M = {}
 
@@ -77,6 +78,28 @@ local function key_hint_line(items)
 			separator = ui.sep(nil, { hl = "UnifiedReviewThreadsSeparator" }),
 		}),
 	}, { hl = "UnifiedReviewThreadsFooter" })
+end
+
+local function key_hint_lines(items, width)
+	if not width or width <= 0 then
+		return { key_hint_line(items) }
+	end
+	local lines = {}
+	local current = {}
+	for _, item in ipairs(items or {}) do
+		local candidate = vim.list_extend(vim.deepcopy(current), { item })
+		local text = renderer.flatten_line(key_hint_line(candidate)).text
+		if #current > 0 and vim.fn.strdisplaywidth(text) > width then
+			table.insert(lines, key_hint_line(current))
+			current = { item }
+		else
+			current = candidate
+		end
+	end
+	if #current > 0 then
+		table.insert(lines, key_hint_line(current))
+	end
+	return #lines > 0 and lines or { key_hint_line({}) }
 end
 
 local function context_line(value)
@@ -191,11 +214,14 @@ local function filter_summary_line(session)
 	)
 end
 
+local content_width_for
+
 function M.render_filter_lines(session)
-	return {
-		filter_summary_line(session),
-		renderer.flatten_line(key_hint_line(OVERVIEW_KEY_ITEMS)).text,
-	}
+	local lines = { filter_summary_line(session) }
+	for _, line in ipairs(key_hint_lines(OVERVIEW_KEY_ITEMS, content_width_for(session))) do
+		table.insert(lines, renderer.flatten_line(line).text)
+	end
+	return lines
 end
 
 local function file_counts(group)
@@ -246,7 +272,7 @@ local function attention_lines(session)
 	return lines
 end
 
-local function content_width_for(session)
+content_width_for = function(session)
 	local ui_state = session and session.ui or {}
 	local win = ui_state.thread_panel_win
 	local width
@@ -582,9 +608,9 @@ local function build_lines(session)
 	local summary = threads.summary(session)
 	local content_width = content_width_for(session)
 	local divider_width = math.min(100, content_width)
-	local lines = {
-		key_hint_line(OVERVIEW_KEY_ITEMS),
-		"",
+	local lines = key_hint_lines(OVERVIEW_KEY_ITEMS, content_width)
+	table.insert(lines, "")
+	vim.list_extend(lines, {
 		context_line(filter_summary_line(session)),
 		context_line(status_line(session, #visible)),
 		context_line(
@@ -610,7 +636,7 @@ local function build_lines(session)
 			plural(summary.resolved, "resolved"),
 			plural(summary.stale, "stale")
 		),
-	}
+	})
 	local attention = attention_lines(session)
 	if #attention > 0 then
 		table.insert(lines, "")
@@ -667,10 +693,10 @@ function M.render_thread_document(thread)
 	local lines = {
 		ui.line({
 			ui.text(STATE_ICONS[st] or "●", state_hl),
-			ui.text(" " .. thread_state_label(thread), state_hl),
-			ui.text(
-				"  " .. (threads.export_icon(thread) == " " and "not exported" or "marked for export"),
-				"UnifiedReviewThreadsBadge"
+			ui.text(" " .. thread_state_label(thread) .. " ", state_hl),
+			ui.badge(
+				(threads.export_icon(thread) == " " and "not exported" or "marked for export"),
+				{ hl = "UnifiedReviewThreadsBadge" }
 			),
 		}, { hl = state_hl }),
 		label_value_line("Target:", target_label(th_target)),
@@ -793,13 +819,33 @@ local function move_thread_selection(session, delta)
 	M.render(session)
 end
 
+local function normalize_path(path, root)
+	if not path then
+		return nil
+	end
+	path = tostring(path):gsub("\\", "/"):gsub("^%./", "")
+	if path:match("^/") and root and root ~= "" then
+		local real_root = vim.loop.fs_realpath(root) or vim.fn.fnamemodify(root, ":p")
+		local real_path = vim.loop.fs_realpath(path) or vim.fn.fnamemodify(path, ":p")
+		real_root = tostring(real_root):gsub("\\", "/"):gsub("/$", "")
+		real_path = tostring(real_path):gsub("\\", "/")
+		local prefix = real_root .. "/"
+		if real_path:sub(1, #prefix) == prefix then
+			return real_path:sub(#prefix + 1)
+		end
+	end
+	return path
+end
+
 local function select_file_for_thread(session, thread)
 	local path = thread and thread.target and thread.target.path
 	if not path then
 		return false
 	end
+	local root = session and session.target and (session.target.root or session.target.worktree_root)
+	path = normalize_path(path, root)
 	for index, file in ipairs(session.files or {}) do
-		if file.path == path or file.old_path == path then
+		if normalize_path(file.path, root) == path or normalize_path(file.old_path, root) == path then
 			selection.select_file(session, index)
 			return true
 		end
@@ -807,35 +853,185 @@ local function select_file_for_thread(session, thread)
 	return false
 end
 
-local function focus_thread_target(session, thread)
-	if not thread or not thread.target or not session.ui then
+local function buffer_snapshot(buf)
+	if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+		return { id = buf, valid = false }
+	end
+	local has_comment_keymap = false
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+		if map.rhs == "<Cmd>UnifiedReview comment<CR>" or map.rhs == "<cmd>UnifiedReview comment<cr>" then
+			has_comment_keymap = true
+			break
+		end
+	end
+	return {
+		id = buf,
+		valid = true,
+		name = vim.api.nvim_buf_get_name(buf),
+		line_count = vim.api.nvim_buf_line_count(buf),
+		has_comment_keymap = has_comment_keymap,
+	}
+end
+
+local function window_snapshot(win)
+	if not (win and vim.api.nvim_win_is_valid(win)) then
+		return { id = win, valid = false }
+	end
+	local cursor = vim.api.nvim_win_get_cursor(win)
+	return {
+		id = win,
+		valid = true,
+		buf = vim.api.nvim_win_get_buf(win),
+		cursor = { cursor[1], cursor[2] },
+	}
+end
+
+local function codediff_snapshot(session)
+	local ui_state = session and session.ui or {}
+	local snapshot = {
+		codediff_tab = ui_state.codediff_tab,
+		left_buffer = buffer_snapshot(ui_state.left_buffer),
+		right_buffer = buffer_snapshot(ui_state.right_buffer),
+		left_window = window_snapshot(ui_state.left_window),
+		right_window = window_snapshot(ui_state.right_window),
+		selection_file_index = session and session.selection and session.selection.file_index,
+		current_file = (selection.current_file(session) or {}).path,
+	}
+	local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+	if ok and ui_state.codediff_tab then
+		local left_buf, right_buf = lifecycle.get_buffers(ui_state.codediff_tab)
+		local left_win, right_win = lifecycle.get_windows(ui_state.codediff_tab)
+		local original_path, modified_path = lifecycle.get_paths(ui_state.codediff_tab)
+		snapshot.lifecycle = {
+			left_buffer = buffer_snapshot(left_buf),
+			right_buffer = buffer_snapshot(right_buf),
+			left_window = window_snapshot(left_win),
+			right_window = window_snapshot(right_win),
+			original_path = original_path,
+			modified_path = modified_path,
+		}
+		local codediff_session = lifecycle.get_session(ui_state.codediff_tab)
+		if codediff_session then
+			snapshot.lifecycle.mode = codediff_session.mode
+			snapshot.lifecycle.layout = codediff_session.layout
+			snapshot.lifecycle.single_pane = codediff_session.single_pane
+		end
+	end
+	return snapshot
+end
+
+local function sync_diff_ui(session)
+	local ok, diff_view = pcall(require, "unified_review.ui.diff_view")
+	if not ok then
+		debug.event("thread.jump.sync_error", { error = diff_view })
 		return
 	end
-	local side = thread.target.side or thread.target.start_side or "right"
-	local row = selection.row_for_target(session, thread.target, side) or 1
-	local win = side == "left" and session.ui.left_window or session.ui.right_window
-	if win and vim.api.nvim_win_is_valid(win) then
-		vim.api.nvim_set_current_win(win)
-		local buf = vim.api.nvim_win_get_buf(win)
-		local line_count = math.max(vim.api.nvim_buf_line_count(buf), 1)
-		pcall(vim.api.nvim_win_set_cursor, win, { math.min(row, line_count), 0 })
+	if type(diff_view.sync) == "function" then
+		pcall(diff_view.sync, session)
 	end
+	if type(diff_view._attach_review_keymaps) == "function" then
+		pcall(diff_view._attach_review_keymaps, session)
+	end
+end
+
+local function target_row(thread)
+	local target = thread and thread.target or {}
+	return tonumber(target.line) or tonumber(target.start_line) or 1
+end
+
+local function focus_thread_target(session, thread, opts)
+	if not thread or not thread.target or not session.ui then
+		debug.event("thread.jump.focus.skip", { reason = "missing-thread-or-ui", thread = thread and thread.id })
+		return false
+	end
+	opts = opts or {}
+	if opts.sync then
+		sync_diff_ui(session)
+	end
+	local selected = select_file_for_thread(session, thread)
+	local side = thread.target.side or thread.target.start_side or "right"
+	local row = selection.row_for_target(session, thread.target, side) or target_row(thread)
+	local win = side == "left" and session.ui.left_window or session.ui.right_window
+	local fallback = false
+	if not (win and vim.api.nvim_win_is_valid(win)) then
+		win = side == "left" and session.ui.right_window or session.ui.left_window
+		fallback = true
+	end
+	if not (win and vim.api.nvim_win_is_valid(win)) then
+		debug.event("thread.jump.focus.fail", {
+			thread = thread.id,
+			target = thread.target,
+			side = side,
+			row = row,
+			selected = selected,
+			snapshot = codediff_snapshot(session),
+		})
+		return false
+	end
+	vim.api.nvim_set_current_win(win)
+	local buf = vim.api.nvim_win_get_buf(win)
+	local line_count = math.max(vim.api.nvim_buf_line_count(buf), 1)
+	pcall(vim.api.nvim_win_set_cursor, win, { math.min(row, line_count), 0 })
+	debug.event("thread.jump.focus", {
+		thread = thread.id,
+		target = thread.target,
+		side = side,
+		row = row,
+		clamped_row = math.min(row, line_count),
+		selected = selected,
+		fallback_window = fallback,
+		win = win,
+		buf = buf,
+		buf_name = vim.api.nvim_buf_get_name(buf),
+		line_count = line_count,
+		snapshot = codediff_snapshot(session),
+	})
+	return true
 end
 
 local function jump_to_thread(session, thread)
 	if not thread then
+		debug.event("thread.jump.skip", { reason = "nil-thread" })
 		return
 	end
+	debug.event("thread.jump.start", {
+		session = session and session.id,
+		kind = session and session.kind,
+		provider = session and session.provider,
+		thread = thread.id,
+		target = thread.target,
+		snapshot = codediff_snapshot(session),
+	})
 	local changed_file = select_file_for_thread(session, thread)
+	debug.event("thread.jump.select_file", {
+		thread = thread.id,
+		changed_file = changed_file,
+		selection_file_index = session and session.selection and session.selection.file_index,
+		current_file = (selection.current_file(session) or {}).path,
+	})
 	if changed_file then
-		pcall(require("unified_review.ui.diff_view").render, session)
+		local ok, err = pcall(require("unified_review.ui.diff_view").render, session, {
+			auto_scroll_to_first_hunk = false,
+		})
+		debug.event(
+			"thread.jump.render",
+			{ ok = ok, error = not ok and err or nil, snapshot = codediff_snapshot(session) }
+		)
 	end
 	focus_thread_target(session, thread)
-	vim.defer_fn(function()
-		if state.get_active() == session then
-			focus_thread_target(session, thread)
-		end
-	end, 120)
+	for _, delay in ipairs({ 40, 120, 250 }) do
+		vim.defer_fn(function()
+			if state.get_active() == session then
+				debug.event("thread.jump.retry", { thread = thread.id, delay = delay })
+				focus_thread_target(session, thread, { sync = true })
+			else
+				debug.event(
+					"thread.jump.retry.skip",
+					{ thread = thread.id, delay = delay, reason = "inactive-session" }
+				)
+			end
+		end, delay)
+	end
 end
 
 local function overview_size()
@@ -1061,6 +1257,20 @@ local function set_keymaps(session, buf)
 	end)
 	map("<CR>", function()
 		local entry = selected_row_entry(session) or current_row_entry(session)
+		debug.event("thread.panel.enter", {
+			entry = entry and {
+				kind = entry.kind,
+				path = entry.path,
+				key = entry.key,
+				selected = entry.selected,
+				thread = entry.thread and entry.thread.id,
+			},
+			selected_id = session._thread_selected_id,
+			selected_key = session._thread_selected_key,
+			current_row = session.ui and session.ui.thread_panel_win and vim.api.nvim_win_is_valid(
+				session.ui.thread_panel_win
+			) and vim.api.nvim_win_get_cursor(session.ui.thread_panel_win)[1] or nil,
+		})
 		if entry and entry.kind == "file" then
 			toggle_fold()
 			return

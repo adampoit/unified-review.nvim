@@ -1,6 +1,7 @@
 local discovery = require("unified_review.session.target_discovery")
 local float = require("unified_review.ui.float")
 local ui = require("components")
+local loader = require("components.loader")
 local renderer = require("components.renderer")
 
 local M = {}
@@ -22,6 +23,7 @@ local HIGHLIGHT_LINKS = {
 	UnifiedReviewPickerMuted = "UnifiedReviewFloatMuted",
 	UnifiedReviewPickerBase = "UnifiedReviewFloatInfo",
 	UnifiedReviewPickerHead = "UnifiedReviewFloatSuccess",
+	UnifiedReviewPickerLoader = "UnifiedReviewFloatInfo",
 }
 
 local function clamp(value, min_value, max_value)
@@ -422,15 +424,26 @@ local function render_pr_picker(state, lines)
 	table.insert(lines, section_line("Open pull requests"))
 	local list_height = state.pr_height or 12
 	local empty_lines
-	if #prs == 0 then
+	if state.pr_loading then
+		empty_lines = {
+			ui.line({
+				ui.text("  "),
+				ui.loader("Fetching GitHub pull requests", {
+					frame = state.loader_frame or 0,
+					hl = "UnifiedReviewPickerContext",
+					spinner_hl = "UnifiedReviewPickerLoader",
+				}),
+			}),
+		}
+	elseif #prs == 0 then
 		empty_lines = { "  No open pull requests were found" }
 	elseif #entries == 0 then
 		empty_lines = { "  No pull requests match the active filter", "  Press C-l to clear the filter" }
 	end
-	local pr_list = ui.list(entries, {
+	local pr_list = ui.list(state.pr_loading and {} or entries, {
 		selectable = true,
 		height = list_height,
-		selected = selected_position or 1,
+		selected = state.pr_loading and 1 or (selected_position or 1),
 		selected_hl = "UnifiedReviewPickerSelection",
 		truncate_width = content_width(state),
 		empty = empty_lines,
@@ -451,6 +464,17 @@ local function render_pr_picker(state, lines)
 	table.insert(lines, section_line("Preview"))
 	if state.validation_error then
 		table.insert(lines, warning_line(state.validation_error))
+	end
+	if state.pr_loading then
+		table.insert(
+			lines,
+			ui.loader("Fetching remote GitHub data", {
+				frame = state.loader_frame or 0,
+				hl = "UnifiedReviewPickerContext",
+				spinner_hl = "UnifiedReviewPickerLoader",
+			})
+		)
+		return
 	end
 	local pr = selected_pr(state)
 	if pr then
@@ -603,6 +627,35 @@ local function focus_picker(state)
 	end
 end
 
+local function stop_loader(state)
+	if not state or not state.loader_timer then
+		return
+	end
+	state.loader_timer:stop()
+	state.loader_timer:close()
+	state.loader_timer = nil
+end
+
+local function start_loader(state, opts)
+	opts = opts or {}
+	stop_loader(state)
+	state.loader_frame = 0
+	local timer = (vim.uv or vim.loop).new_timer()
+	state.loader_timer = timer
+	timer:start(
+		opts.interval or 180,
+		opts.interval or 180,
+		vim.schedule_wrap(function()
+			if state.closed or not state.pr_loading then
+				stop_loader(state)
+				return
+			end
+			state.loader_frame = loader.frame_after(state.loader_frame)
+			render(state)
+		end)
+	)
+end
+
 local function install_focus_autocmds(state)
 	state.autocmd_group = vim.api.nvim_create_augroup("unified_review_target_picker_" .. tostring(state.buf), {
 		clear = true,
@@ -624,6 +677,7 @@ local function close(state)
 		return
 	end
 	state.closed = true
+	stop_loader(state)
 	if state.autocmd_group then
 		pcall(vim.api.nvim_del_augroup_by_id, state.autocmd_group)
 	end
@@ -655,17 +709,41 @@ local function load_commits(state)
 	state.validation_error = err and (err.message or err.stderr) or nil
 end
 
-local function load_prs(state)
-	local disc = state.discovery or {}
-	local prs, err = discovery.open_pull_requests({
-		cwd = disc.root or disc.cwd,
-		root = disc.root,
-		limit = state.pr_limit or 50,
-	})
+local function finish_load_prs(state, prs, err)
+	if state.closed then
+		return
+	end
+	state.pr_loading = false
+	stop_loader(state)
 	state.prs = prs or {}
 	state.pr_filter = state.pr_filter or ""
 	state.pr_selected = #state.prs >= 1 and 1 or nil
 	state.validation_error = err and (err.message or err.stderr) or nil
+	render(state)
+end
+
+local function load_prs(state)
+	local disc = state.discovery or {}
+	local opts = {
+		cwd = disc.root or disc.cwd,
+		root = disc.root,
+		limit = state.pr_limit or 50,
+	}
+	state.prs = {}
+	state.pr_filter = state.pr_filter or ""
+	state.pr_selected = nil
+	state.validation_error = nil
+	state.pr_loading = true
+	start_loader(state)
+	render(state)
+	if type(discovery.open_pull_requests_async) == "function" then
+		discovery.open_pull_requests_async(opts, function(prs, err)
+			finish_load_prs(state, prs, err)
+		end)
+		return
+	end
+	local prs, err = discovery.open_pull_requests(opts)
+	finish_load_prs(state, prs, err)
 end
 
 local function select_current(state)
@@ -705,6 +783,10 @@ local function select_current(state)
 		return
 	end
 	if state.mode == "pr" then
+		if state.pr_loading then
+			state.validation_error = "Still fetching GitHub pull requests"
+			return
+		end
 		local pr = selected_pr(state)
 		if not pr or not pr.target then
 			state.validation_error = "No pull request is selected"
@@ -1010,6 +1092,10 @@ local function set_keymaps(state)
 		if state.filtering then
 			exit_filter_mode(state)
 		elseif state.mode == "custom" or state.mode == "commit" or state.mode == "pr" then
+			if state.mode == "pr" then
+				state.pr_loading = false
+				stop_loader(state)
+			end
 			state.mode = "list"
 			state.validation_error = nil
 			state.filtering = false

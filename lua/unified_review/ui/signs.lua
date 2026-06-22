@@ -40,7 +40,7 @@ function M.setup()
 end
 
 local function sign_for(thread)
-	if thread.state == "stale" or thread.is_outdated then
+	if review_thread.is_stale(thread) then
 		return "UnifiedReviewStale"
 	end
 	if thread.state == "resolved" then
@@ -122,40 +122,42 @@ function M.place(session)
 	M.clear(session)
 	local sign_id = 1
 	for _, thread in ipairs(session.threads or {}) do
-		for _, side in ipairs({ "left", "right" }) do
-			local rows = thread_rows(session, thread, side)
-			local buf = side == "left" and session.ui.left_buffer or session.ui.right_buffer
-			if buf and vim.api.nvim_buf_is_valid(buf) then
-				local total = #rows
-				for index, row in ipairs(rows) do
-					if index == 1 and review_thread.is_exported(thread) then
-						vim.fn.sign_place(
-							sign_id,
-							namespace,
-							"UnifiedReviewExported",
-							buf,
-							{ lnum = row, priority = 25 }
-						)
+		if not review_thread.is_stale(thread) then
+			for _, side in ipairs({ "left", "right" }) do
+				local rows = thread_rows(session, thread, side)
+				local buf = side == "left" and session.ui.left_buffer or session.ui.right_buffer
+				if buf and vim.api.nvim_buf_is_valid(buf) then
+					local total = #rows
+					for index, row in ipairs(rows) do
+						if index == 1 and review_thread.is_exported(thread) then
+							vim.fn.sign_place(
+								sign_id,
+								namespace,
+								"UnifiedReviewExported",
+								buf,
+								{ lnum = row, priority = 25 }
+							)
+							sign_id = sign_id + 1
+						end
+						-- Pick the right sign: normal icon for single-line threads,
+						-- range brackets for multi-line threads.
+						local sign_name
+						if total == 1 then
+							sign_name = sign_for(thread)
+						else
+							local bracket = range_bracket(index, total)
+							if bracket == range_icons.top then
+								sign_name = "UnifiedReviewRangeTop"
+							elseif bracket == range_icons.mid then
+								sign_name = "UnifiedReviewRangeMid"
+							else
+								sign_name = "UnifiedReviewRangeBot"
+							end
+						end
+						vim.fn.sign_place(sign_id, namespace, sign_name, buf, { lnum = row, priority = 20 })
+
 						sign_id = sign_id + 1
 					end
-					-- Pick the right sign: normal icon for single-line threads,
-					-- range brackets for multi-line threads.
-					local sign_name
-					if total == 1 then
-						sign_name = sign_for(thread)
-					else
-						local bracket = range_bracket(index, total)
-						if bracket == range_icons.top then
-							sign_name = "UnifiedReviewRangeTop"
-						elseif bracket == range_icons.mid then
-							sign_name = "UnifiedReviewRangeMid"
-						else
-							sign_name = "UnifiedReviewRangeBot"
-						end
-					end
-					vim.fn.sign_place(sign_id, namespace, sign_name, buf, { lnum = row, priority = 20 })
-
-					sign_id = sign_id + 1
 				end
 			end
 		end

@@ -309,36 +309,49 @@ function M.current_threads(session)
 	return threads
 end
 
-function M.thread_at_target(session, target)
+function M.threads_at_target(session, target)
+	local found = {}
 	if not target then
-		return nil
+		return found
 	end
 	for _, thread in ipairs(session.threads or {}) do
 		local thread_target = thread.target or {}
 		if thread_target.path == target.path then
 			if thread_target.kind == "file" or target.kind == "file" then
-				return thread
-			end
-			local start_line = thread_target.start_line or thread_target.line
-			local end_line = thread_target.line or thread_target.start_line
-			local line = target.line or target.start_line
-			if
-				line
-				and start_line
-				and end_line
-				and line >= math.min(start_line, end_line)
-				and line <= math.max(start_line, end_line)
-			then
-				return thread
+				table.insert(found, thread)
+			else
+				local start_line = thread_target.start_line or thread_target.line
+				local end_line = thread_target.line or thread_target.start_line
+				local line = target.line or target.start_line
+				if
+					line
+					and start_line
+					and end_line
+					and line >= math.min(start_line, end_line)
+					and line <= math.max(start_line, end_line)
+				then
+					table.insert(found, thread)
+				end
 			end
 		end
 	end
-	return nil
+	return found
 end
 
-function M.current_thread(session)
+--- All threads overlapping the cursor target in the active diff buffer. When
+--- several threads overlap (e.g. a multiline range comment and a single-line
+--- comment on a line inside that range), callers should disambiguate rather
+--- than silently picking one. Callers wanting the `]t`/`[t`-navigated thread
+--- should use `current_threads(session)[session.selection.thread_index or 1]`.
+function M.current_thread_candidates(session)
+	if not session or not session.ui then
+		return {}
+	end
 	local target = M.current_target(session)
-	return M.thread_at_target(session, target) or M.current_threads(session)[session.selection.thread_index or 1]
+	if not target then
+		return {}
+	end
+	return M.threads_at_target(session, target)
 end
 
 function M.select_thread(session, index)

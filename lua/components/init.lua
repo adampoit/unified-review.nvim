@@ -5,6 +5,7 @@ local divider = require("components.divider")
 local inset = require("components.inset")
 local line = require("components.line")
 local list = require("components.list")
+local loader = require("components.loader")
 local pad_left = require("components.pad_left")
 local pad_right = require("components.pad_right")
 local section = require("components.section")
@@ -71,6 +72,10 @@ end
 
 function M.list(items, opts)
 	return list.list(items, opts)
+end
+
+function M.loader(label, opts)
+	return loader.component(label, opts)
 end
 
 function M.tree(nodes, opts)

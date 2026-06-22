@@ -29,6 +29,19 @@ describe("ui component renderer", function()
 		assert.are.equal("DividerHl", flattened.highlights[1].group)
 	end)
 
+	it("renders loader frames as a stable-width multi-dot braille spinner", function()
+		local flattened = renderer.flatten({
+			ui.line({ ui.loader("Loading", { frame = 0, hl = "TextHl", spinner_hl = "SpinnerHl" }) }),
+			ui.line({ ui.loader("Loading", { frame = 2, hl = "TextHl", spinner_hl = "SpinnerHl" }) }),
+		})
+
+		assert.are.same({ "⠋ Loading", "⠹ Loading" }, flattened.lines)
+		assert.are.equal("SpinnerHl", flattened.highlights[1].group)
+		assert.are.equal(0, flattened.highlights[1].start_col)
+		assert.are.equal(#"⠋", flattened.highlights[1].end_col)
+		assert.are.equal("TextHl", flattened.highlights[2].group)
+	end)
+
 	it("keeps badge spacing in horizontal lists instead of badge rendering", function()
 		local flattened = renderer.flatten({
 			ui.line({ ui.badge("git", { hl = "BadgeHl" }), ui.text("target") }),
