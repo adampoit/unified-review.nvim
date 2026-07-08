@@ -2,8 +2,11 @@
 
 ## Commands
 
-- Lua/plenary tests: `nix run .`
-  - Subsets: `nix run .#test-plugin` or `nix run .#test-components`
-- TUI E2E tests: `npm ci && npm run test:e2e`
-  - Subsets: `npm run test:e2e:plugin` or `npm run test:e2e:components`
-- Flake validation: `nix flake check`
+- Full validation: `scripts/test.sh all`
+- Individual suites: `scripts/test.sh <typecheck|lua|lua-plugin|lua-components|pi-unit|pi-bridge|flake|tui|tui-plugin|tui-components>`
+- TUI artifacts: `scripts/test.sh tui --artifacts`
+- Install Node dependencies before TypeScript or E2E tests: `npm ci`
+
+## Boundaries
+
+- Keep pi/Neovim handoffs on the versioned JSON artifact contracts; do not couple extensions to Neovim UI internals.

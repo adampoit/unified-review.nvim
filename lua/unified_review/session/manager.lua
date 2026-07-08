@@ -362,7 +362,8 @@ function M.refresh()
 	return refreshed, nil
 end
 
-function M.create_comment(body, target)
+function M.create_comment(body, target, opts)
+	opts = opts or {}
 	local session = state.get_active()
 	if not session then
 		return nil, { message = "No active review session" }
@@ -375,20 +376,24 @@ function M.create_comment(body, target)
 	if not target then
 		return nil, { message = "No comment target at cursor" }
 	end
-	local thread, err = comments_for(session).create_thread(session, target, body)
+	local thread, err = comments_for(session).create_thread(session, target, body, opts)
 	if not thread then
 		notify_error(err and err.message or "failed to create comment")
 		return nil, err
 	end
-	refresh_ui(session)
-	if config.options.local_git.auto_copy_on_add then
+	if opts.refresh_ui ~= false then
+		refresh_ui(session)
+	end
+	if config.options.local_git.auto_copy_on_add and opts.auto_copy ~= false then
 		export.copy(comments_for(session).list_threads(session), { format = "markdown", session = session })
 	end
-	vim.notify(
-		"Created draft comment at " .. comment_target.label(thread.target),
-		vim.log.levels.INFO,
-		{ title = "unified-review" }
-	)
+	if opts.notify ~= false then
+		vim.notify(
+			"Created draft comment at " .. comment_target.label(thread.target),
+			vim.log.levels.INFO,
+			{ title = "unified-review" }
+		)
+	end
 	return thread, nil
 end
 

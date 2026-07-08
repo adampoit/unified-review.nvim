@@ -1,0 +1,43 @@
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "author": "pi-agent",
+  "source": {
+    "name": "pi-coding-agent",
+    "run_id": "fixture-run",
+    "model": "test/model"
+  },
+  "summary": "One issue found.",
+  "comments": [
+    {
+      "id": "line-comment",
+      "body": "Handle the missing value before dereferencing it.",
+      "severity": "warning",
+      "category": "bug",
+      "target": {
+        "kind": "line",
+        "path": "lua/example.lua",
+        "side": "right",
+        "line": 42
+      }
+    },
+    {
+      "id": "range-comment",
+      "body": "This range can be simplified.",
+      "target": {
+        "kind": "range",
+        "path": "lua/example.lua",
+        "start_side": "right",
+        "start_line": 50,
+        "side": "right",
+        "line": 58
+      }
+    },
+    {
+      "body": "Add coverage for this file.",
+      "target": {
+        "kind": "file",
+        "path": "tests/example_spec.lua"
+      }
+    }
+  ]
+}

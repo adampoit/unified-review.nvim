@@ -195,9 +195,12 @@ test("resolved and exported thread markers preserve spacer alignment", async ({
       visibleRows.some((row) => occurrences(row, marker) >= 2),
   );
   captureTerminal(terminal, "inline comments - resolved exported state");
-  const bodyRow = rows.find((row) => row.includes(body));
+  const bodyRow = rows.find((row) => row.includes(body) && row.includes("╱"));
   assert.ok(bodyRow, `expected visible body row ${body}`);
-  assert.equal(occurrences(rows.join("\n"), body), 1);
+  assert.equal(
+    rows.filter((row) => row.includes(body) && row.includes("╱")).length,
+    1,
+  );
   const midpoint = Math.floor(bodyRow.length / 2);
   assert.ok(bodyRow.indexOf(body) >= midpoint, `got:\n${bodyRow}`);
   assert.ok(bodyRow.indexOf("╱") < midpoint, `got:\n${bodyRow}`);

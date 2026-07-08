@@ -1,0 +1,12 @@
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "comments": [
+    {
+      "body": "Missing line coordinates.",
+      "target": {
+        "kind": "line",
+        "path": "lua/example.lua"
+      }
+    }
+  ]
+}
