@@ -205,6 +205,41 @@ describe("target discovery", function()
 		assert.are.equal(before_head, after_head)
 	end)
 
+	it("uses the colocated Git root for GitHub discovery from an additional jj workspace", function()
+		local root = jj_repo.create()
+		jj_repo.write(root, "a.lua", { "return 1" })
+		jj_repo.describe(root, "base")
+		jj_repo.bookmark(root, "feature-bookmark", "@")
+		local workspace = jj_repo.add_workspace(root)
+		local expected_git_root = jj_repo.run(workspace, { "git", "root" }):gsub("%s+$", "")
+		local requested_cwd
+		package.loaded["unified_review.integrations.gh"] = {
+			available = function()
+				return true
+			end,
+			discover_pr_base = function(cwd)
+				requested_cwd = cwd
+				return { number = 9, base_name = "main", title = "Workspace PR" }, nil
+			end,
+		}
+
+		local result = assert(discovery.discover({ cwd = workspace }))
+		local items = by_id(result.items)
+
+		assert.is_nil(vim.loop.fs_stat(workspace .. "/.git"))
+		assert.are.equal(vim.loop.fs_realpath(expected_git_root), vim.loop.fs_realpath(requested_cwd))
+		assert.are.equal(vim.loop.fs_realpath(workspace), vim.loop.fs_realpath(result.root))
+		assert.are.equal(vim.loop.fs_realpath(expected_git_root), vim.loop.fs_realpath(result.git_root))
+		assert.are.equal(
+			vim.loop.fs_realpath(expected_git_root),
+			vim.loop.fs_realpath(items["jj-github-pr"].target.cwd)
+		)
+		assert.are.equal(
+			vim.loop.fs_realpath(workspace),
+			vim.loop.fs_realpath(items["jj-github-pr-local"].target.local_root)
+		)
+	end)
+
 	it("passes the current jj bookmark to gh PR fallback discovery", function()
 		local root = jj_repo.create()
 		jj_repo.write(root, "a.lua", { "return 1" })

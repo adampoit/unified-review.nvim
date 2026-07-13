@@ -63,6 +63,12 @@ function M.new(root)
 	run(root, { "new" })
 end
 
+function M.add_workspace(root)
+	local workspace = vim.fn.tempname()
+	run(root, { "workspace", "add", workspace })
+	return workspace
+end
+
 function M.bookmark(root, name, revset)
 	run(root, { "bookmark", "set", name, "-r", revset or "@" })
 end
