@@ -14,7 +14,8 @@ A Neovim plugin for reviewing local changes, jj changes, and GitHub pull request
 - Persistent local review threads and replies
 - Line, range, and file-level comments
 - Inline comment blocks aligned across side-by-side diffs
-- Thread panel with filtering, preview, reply, resolve/reopen, and delete actions
+- Inline comment and reply editors anchored to their diff threads
+- Adaptive thread workspace with filtering, conversational details, contextual actions, and inline replies
 - Markdown/minimal review summary export
 - Optional GitHub pending-review submission and local-draft publishing
 - Scriptable agent-feedback import and diff-context export

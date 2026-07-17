@@ -76,17 +76,10 @@ describe("thread panel", function()
 		local lines = thread_panel.render_lines(session)
 		local rendered = text(lines)
 
-		assert.matches("o/v/d/s/a  states", lines[1])
-		local summary_row
-		for index, line in ipairs(lines) do
-			if line:match("Threads:") then
-				summary_row = index
-				break
-			end
-		end
-		assert.is_not_nil(summary_row)
-		assert.are.equal("", lines[summary_row - 1])
-		assert.matches("Scope: project", rendered)
+		assert.matches("1 open · 1 draft · 1 resolved · 3 threads total", lines[1])
+		assert.matches("Project · all states · no query", rendered)
+		assert.not_matches("Status:", rendered)
+		assert.not_matches("Needs attention", rendered)
 		assert.matches("a%.lua", rendered)
 		assert.matches("b%.lua", rendered)
 		assert.matches("L4", rendered)
@@ -103,7 +96,7 @@ describe("thread panel", function()
 
 		local rendered = text(thread_panel.render_lines(session))
 
-		assert.matches("Scope: current file", rendered)
+		assert.matches("Current file · all states · no query", rendered)
 		assert.matches("a%.lua", rendered)
 		assert.not_matches("b%.lua", rendered)
 		assert.matches("consider renaming", rendered)
@@ -148,11 +141,10 @@ describe("thread panel", function()
 		session._thread_query = "alice consider"
 
 		local header = thread_panel.render_filter_lines(session)
-		assert.matches("States:.*open", header[1])
-		assert.matches("Scope: project", header[1])
-		assert.matches("Query: alice consider", header[1])
-		assert.matches("o/v/d/s/a  states", header[2])
-		assert.not_matches("Keys:", header[2])
+		assert.matches("3 threads total", header[1])
+		assert.matches("Project", header[2])
+		assert.matches("all states", header[2])
+		assert.matches("query: alice consider", header[2])
 		local rendered = text(thread_panel.render_lines(session))
 		assert.matches("consider renaming", rendered)
 		assert.not_matches("fixed this range", rendered)
@@ -248,8 +240,8 @@ describe("thread panel", function()
 
 		assert.matches("local draft", rendered)
 		assert.matches("remote draft", rendered)
-		assert.matches("1 local", rendered)
-		assert.matches("1 remote", rendered)
+		assert.matches("2 drafts", rendered)
+		assert.matches("1 local draft ready to publish", rendered)
 	end)
 
 	it("renders a scrollable thread preview with all comments", function()
@@ -264,8 +256,9 @@ describe("thread panel", function()
 		})
 
 		assert.matches("open", lines[1])
-		assert.matches("L12", lines[2])
-		assert.matches("a.lua", text(lines))
+		assert.matches("L12", lines[1])
+		assert.matches("2 comments", lines[1])
+		assert.matches("a.lua", lines[2])
 		assert.matches("alice", text(lines))
 		assert.matches("first", text(lines))
 		assert.matches("bob", text(lines))
@@ -289,14 +282,11 @@ describe("thread panel", function()
 		local lines = vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false)
 		local marks =
 			vim.api.nvim_buf_get_extmarks(session.ui.thread_panel_buf, thread_panel.ns, 0, -1, { details = true })
-		local saw_key = false
 		local saw_section = false
 		local saw_state = false
 		for _, mark in ipairs(marks) do
 			local details = mark[4] or {}
-			if details.hl_group == "UnifiedReviewThreadsKey" then
-				saw_key = true
-			elseif details.hl_group == "UnifiedReviewThreadsSection" then
+			if details.hl_group == "UnifiedReviewThreadsSection" then
 				saw_section = true
 			elseif details.hl_group == "UnifiedReviewThreadsOpen" then
 				saw_state = true
@@ -304,6 +294,21 @@ describe("thread panel", function()
 		end
 		assert.not_matches("Review Overview", text(lines))
 		assert.matches("consider renaming", text(lines))
+		assert.is_true(vim.api.nvim_buf_is_valid(session.ui.thread_panel_action_buf))
+		assert.is_true(vim.api.nvim_win_is_valid(session.ui.thread_panel_action_win))
+		local action_lines = vim.api.nvim_buf_get_lines(session.ui.thread_panel_action_buf, 0, -1, false)
+		assert.matches("Enter", text(action_lines))
+		assert.matches("help", text(action_lines))
+		local action_marks =
+			vim.api.nvim_buf_get_extmarks(session.ui.thread_panel_action_buf, thread_panel.action_ns, 0, -1, {
+				details = true,
+			})
+		local saw_key = false
+		for _, mark in ipairs(action_marks) do
+			if (mark[4] or {}).hl_group == "UnifiedReviewThreadsKey" then
+				saw_key = true
+			end
+		end
 		assert.is_true(saw_key)
 		assert.is_true(saw_section)
 		assert.is_true(saw_state)
@@ -312,6 +317,8 @@ describe("thread panel", function()
 		assert.is_true(closed)
 		assert.is_false(thread_panel.is_open())
 		assert.is_nil(session.ui.thread_panel_buf)
+		assert.is_nil(session.ui.thread_panel_action_buf)
+		assert.is_nil(session.ui.thread_panel_action_win)
 	end)
 
 	it("moves selection with list-style navigation instead of cursor roaming", function()
@@ -373,6 +380,59 @@ describe("thread panel", function()
 		assert.is_false(session._thread_file_collapsed["a.lua"])
 		rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
 		assert.matches("consider renaming", rendered)
+		assert.matches("fixed this range", rendered)
+	end)
+
+	it("uses a focused detail view on narrow layouts and returns to the list with Escape", function()
+		local session = make_session()
+		state.set_active(session)
+		thread_panel.open()
+
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<CR>"))
+		assert.are.equal("detail", session._thread_panel_view)
+		local rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
+		assert.matches("Thread details", rendered)
+		assert.matches("● open · right L4 · 1 comment", rendered)
+		assert.matches("alice", rendered)
+		assert.not_matches("▾ a%.lua", rendered)
+
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<Esc>"))
+		assert.are.equal("list", session._thread_panel_view)
+		assert.are.equal("thread-1", session._thread_selected_id)
+		rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
+		assert.matches("▾ a%.lua", rendered)
+	end)
+
+	it("shows panel shortcuts on demand", function()
+		local session = make_session()
+		state.set_active(session)
+		thread_panel.open()
+
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "?"))
+		local rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
+		assert.matches("Keyboard shortcuts", rendered)
+		assert.matches("resolve or reopen", rendered)
+		assert.matches("clear filters", rendered)
+
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<Esc>"))
+		assert.is_false(session._thread_panel_help)
+		assert.are.equal("thread-1", session._thread_selected_id)
+	end)
+
+	it("restores the selected detail when the panel is reopened", function()
+		local session = make_session()
+		state.set_active(session)
+		thread_panel.open()
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "j"))
+		assert.are.equal("thread-2", session._thread_selected_id)
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<CR>"))
+		assert.are.equal("detail", session._thread_panel_view)
+
+		thread_panel.close()
+		thread_panel.open()
+		assert.are.equal("thread-2", session._thread_selected_id)
+		assert.are.equal("detail", session._thread_panel_view)
+		local rendered = text(vim.api.nvim_buf_get_lines(session.ui.thread_panel_buf, 0, -1, false))
 		assert.matches("fixed this range", rendered)
 	end)
 
@@ -445,6 +505,8 @@ describe("thread panel", function()
 		}
 		state.set_active(session)
 		assert.is_true(thread_panel.open(session))
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<CR>"))
+		assert.are.equal("detail", session._thread_panel_view)
 		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "<CR>"))
 
 		local ok = vim.wait(500, function()

@@ -5,7 +5,6 @@ local renderer = require("components.renderer")
 local M = {}
 
 local ZINDEX = {
-	comment_editor = 200,
 	thread_preview = 80,
 	help = 65,
 	submit = 52,

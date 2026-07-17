@@ -827,6 +827,65 @@ describe("inline comments", function()
 		vim.wo[win].foldcolumn = old_foldcolumn
 	end)
 
+	it("reserves aligned virtual rows for an inline composer", function()
+		local left_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(left_buf, 0, -1, false, { "left 1", "left 2", "left 3" })
+		local right_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(right_buf, 0, -1, false, { "right 1", "right 2", "right 3" })
+		local editor = {
+			target = { kind = "line", path = "a.lua", side = "right", line = 2 },
+			total_height = 6,
+		}
+		local session = {
+			ui = { left_buffer = left_buf, right_buffer = right_buf },
+			files = { { path = "a.lua", hunks = {} } },
+			selection = { file_index = 1 },
+			threads = {},
+			_inline_editor = editor,
+		}
+
+		inline.place(session)
+
+		local left_marks = extmarks(left_buf)
+		local right_marks = extmarks(right_buf)
+		assert.are.equal(1, #left_marks)
+		assert.are.equal(1, #right_marks)
+		assert.are.equal(6, #left_marks[1][4].virt_lines)
+		assert.are.equal(6, #right_marks[1][4].virt_lines)
+		assert.matches("╱", flatten_virt_lines(left_marks[1]))
+		assert.is_not_nil(editor.geometry)
+		assert.are.equal(right_buf, editor.geometry.buffer)
+		assert.are.equal(1, editor.geometry.row)
+		assert.are.equal(0, editor.geometry.row_offset)
+	end)
+
+	it("places a reply composer after the existing thread block", function()
+		local right_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(right_buf, 0, -1, false, { "line 1", "line 2" })
+		local target = { kind = "line", path = "a.lua", side = "right", line = 1 }
+		local editor = { target = target, total_height = 6 }
+		local session = {
+			ui = { left_buffer = vim.api.nvim_create_buf(false, true), right_buffer = right_buf },
+			files = { { path = "a.lua", hunks = {} } },
+			selection = { file_index = 1 },
+			threads = {
+				{
+					state = "open",
+					target = target,
+					comments = { { author = "alice", body = "existing comment" } },
+				},
+			},
+			_inline_editor = editor,
+		}
+
+		inline.place(session)
+
+		local mark = extmarks(right_buf)[1]
+		assert.matches("existing comment", flatten_virt_lines(mark))
+		assert.are.equal(#mark[4].virt_lines - editor.total_height, editor.geometry.row_offset)
+		assert.is_true(editor.geometry.row_offset > 0)
+	end)
+
 	it("does not change buffer contents or line count", function()
 		local buf = vim.api.nvim_create_buf(false, true)
 		local lines = { "line 1", "line 2" }

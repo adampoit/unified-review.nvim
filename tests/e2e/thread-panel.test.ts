@@ -12,6 +12,7 @@ import {
   luaString,
   runLua,
   vimEscapePath,
+  waitForBuffer,
 } from "./helpers.js";
 
 configureNvimTest(test, { columns: 120, rows: 36 });
@@ -70,15 +71,20 @@ async function openRealReview(terminal: Terminal) {
 async function createCommentAtCurrentLine(terminal: Terminal, body: string) {
   terminal.write("\u001c\u000e");
   terminal.write(":UnifiedReview comment\r");
-  await expect(terminal.getByText("[:w/<C-s>] save")).toBeVisible();
+  await expect(
+    terminal.getByText("<C-s> save · Esc cancel", { strict: false }),
+  ).toBeVisible();
   await delay(50);
   terminal.write(body);
   await expect(terminal.getByText(body)).toBeVisible();
   terminal.write("\u001c\u000e");
   terminal.write(":write\r");
-  await expect(
-    terminal.getByText(/Created draft comment/g, { strict: false }),
-  ).toBeVisible();
+  await waitForBuffer(
+    terminal,
+    (visibleRows) =>
+      visibleRows.some((row) => row.includes(body)) &&
+      !visibleRows.some((row) => row.includes("Comment ·")),
+  );
 }
 
 test("UnifiedReview local opens a git diff and thread panel empty state", async ({
@@ -132,10 +138,9 @@ test("thread panel supports inline replies without opening another modal", async
   ).toBeVisible();
 
   terminal.write("R");
+  await expect(terminal.getByText("Thread details")).toBeVisible();
   await expect(terminal.getByText("Reply")).toBeVisible();
-  await expect(
-    terminal.getByText("Edit below in this panel", { strict: false }),
-  ).toBeVisible();
+  await expect(terminal.getByText("C-s", { strict: false })).toBeVisible();
 
   terminal.write("inline e2e reply");
   await expect(
@@ -146,7 +151,12 @@ test("thread panel supports inline replies without opening another modal", async
   terminal.write(
     ":lua vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'x', false)\r",
   );
-  await expect(terminal.getByText("Created draft reply")).toBeVisible();
+  await waitForBuffer(
+    terminal,
+    (visibleRows) =>
+      visibleRows.some((row) => row.includes("inline e2e reply")) &&
+      !visibleRows.some((row) => row.includes("Reply")),
+  );
   captureTerminal(terminal, "thread panel - inline reply saved");
   terminal.write("q");
 
@@ -173,7 +183,9 @@ test("thread panel supports resolve, reopen, delete, filtering, and jump", async
   ).toBeVisible();
   captureTerminal(terminal, "thread panel - resolved draft");
   terminal.write("r");
-  await expect(terminal.getByText("✎ draft", { strict: false })).toBeVisible();
+  await expect(
+    terminal.getByText("✎ local draft", { strict: false }),
+  ).toBeVisible();
 
   terminal.write("F");
   await expect(terminal.getByText("Filter review threads:")).toBeVisible();
@@ -226,24 +238,36 @@ test("thread panel jump to another file is not overridden by CodeDiff first-hunk
     ].join("\n"),
   );
   terminal.write(`:luafile ${vimEscapePath(setupScript)}\r`);
-  await delay(200);
-  terminal.write("\r");
-  await delay(100);
+  await expect(
+    terminal.getByText("Review Overview", { strict: false }),
+  ).toBeVisible();
   await expect(
     terminal.getByText("jump target", { strict: false }),
   ).toBeVisible();
 
   terminal.write("\r");
+  await expect(terminal.getByText("Thread details")).toBeVisible();
+  terminal.write("\r");
   await expect(
     terminal.getByText("B_CHANGED_TARGET_LINE", { strict: false }),
   ).toBeVisible();
-  await delay(1000);
+  await expect(
+    terminal.getByText("Review Overview", { strict: false }),
+  ).not.toBeVisible();
+  await delay(5000);
 
   runLua(
     terminal,
     "local session = require('unified_review.session.state').get_active(); vim.notify('E2E_THREAD_JUMP_CURSOR:' .. tostring(vim.api.nvim_win_get_cursor(session.ui.right_window)[1]))",
   );
   await expect(terminal.getByText("E2E_THREAD_JUMP_CURSOR:80")).toBeVisible();
+
+  terminal.write(":UnifiedReview threads\r");
+  await expect(terminal.getByText("Thread details")).toBeVisible();
+  await expect(
+    terminal.getByText("jump target e2e body", { strict: false }),
+  ).toBeVisible();
+  terminal.write("q");
 });
 
 test("summary copy and save are driven through the real summary UI", async ({
@@ -290,7 +314,7 @@ test("help, status, close, and no-session are usable", async ({ terminal }) => {
     terminal.getByText("Review Overview", { strict: false }),
   ).toBeVisible();
   await expect(
-    terminal.getByText("Scope: project", { strict: false }),
+    terminal.getByText("Project · all states · no query", { strict: false }),
   ).toBeVisible();
   terminal.write("F");
   await expect(terminal.getByText("Filter review threads:")).toBeVisible();
@@ -306,6 +330,43 @@ test("help, status, close, and no-session are usable", async ({ terminal }) => {
   await expect(terminal.getByText("No active review session")).toBeVisible();
 });
 
+test.describe("wide terminal layout", () => {
+  test.use({ columns: 180, rows: 40 });
+
+  test("thread list, conversation, and reply composer share one workspace", async ({
+    terminal,
+  }) => {
+    await openRealReview(terminal);
+    await createCommentAtCurrentLine(terminal, "wide workspace root comment");
+
+    terminal.write(":UnifiedReview threads\r");
+    await expect(terminal.getByText("Threads")).toBeVisible();
+    await expect(terminal.getByText("Details")).toBeVisible();
+    await expect(
+      terminal.getByText("wide workspace root comment", { strict: false }),
+    ).toBeVisible();
+
+    terminal.write("R");
+    await expect(terminal.getByText("Reply")).toBeVisible();
+    terminal.write("wide workspace reply draft\rsecond reply paragraph");
+    await expect(
+      terminal.getByText("wide workspace reply draft", { strict: false }),
+    ).toBeVisible();
+    await expect(
+      terminal.getByText("second reply paragraph", { strict: false }),
+    ).toBeVisible();
+    captureTerminal(terminal, "thread panel - wide inline reply");
+
+    terminal.write("\u001b");
+    await expect(terminal.getByText("Reply")).not.toBeVisible();
+    await expect(
+      terminal.getByText("-- INSERT --", { strict: false }),
+    ).not.toBeVisible();
+    await expect(terminal.getByText("Details")).toBeVisible();
+    terminal.write("q");
+  });
+});
+
 test.describe("small terminal layouts", () => {
   test.use({ columns: 80, rows: 24 });
 
@@ -318,13 +379,20 @@ test.describe("small terminal layouts", () => {
     await expect(
       terminal.getByText("Review Overview", { strict: false }),
     ).toBeVisible();
-    await expect(terminal.getByText("Status:")).toBeVisible();
-    await expect(terminal.getByText("o/v/d/s/a  states")).toBeVisible();
+    await expect(terminal.getByText("0 threads total")).toBeVisible();
+    await expect(
+      terminal.getByText("Leave a comment from the diff", { strict: false }),
+    ).toBeVisible();
     captureTerminal(terminal, "thread panel - small terminal");
 
+    terminal.write("?");
+    await expect(terminal.getByText("Keyboard shortcuts")).toBeVisible();
+    await expect(
+      terminal.getByText("toggle open/resolved/draft/stale", { strict: false }),
+    ).toBeVisible();
+    terminal.write("\u001b");
     terminal.write("F");
     await expect(terminal.getByText("Filter review threads:")).toBeVisible();
-    await expect(terminal.getByText("o/v/d/s/a  states")).toBeVisible();
   });
 });
 
@@ -340,7 +408,8 @@ test.describe("very small terminal layout", () => {
     await expect(
       terminal.getByText("Review Overview", { strict: false }),
     ).toBeVisible();
-    await expect(terminal.getByText("Status:")).toBeVisible();
+    await expect(terminal.getByText("0 threads total")).toBeVisible();
+    await expect(terminal.getByText("?", { strict: false })).toBeVisible();
     terminal.write(":lua require('unified_review.ui.thread_panel').close()\r");
     await expect(
       terminal.getByText("Review Overview", { strict: false }),
