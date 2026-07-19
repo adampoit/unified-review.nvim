@@ -249,7 +249,14 @@ function M.select_target(opts)
 		on_select = function(target, item)
 			local artifact = target_artifact(target, item)
 			if opts.path then
-				write_json(opts.path, artifact)
+				local wrote, write_err = write_json(opts.path, artifact)
+				if not wrote then
+					vim.notify(
+						write_err and write_err.message or "failed to write selection artifact",
+						vim.log.levels.ERROR
+					)
+					return
+				end
 			end
 			if type(opts.on_select) == "function" then
 				opts.on_select(artifact)

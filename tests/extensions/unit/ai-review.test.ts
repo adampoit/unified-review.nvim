@@ -5,7 +5,12 @@ import {
   type AiReviewDependencies,
 } from "../../../extensions/ai-review.ts";
 
-function harness() {
+function harness(
+  options: {
+    contextDiagnostics?: { status?: string; message?: string };
+    headlessResult?: { exitCode: number | null; stderr: string };
+  } = {},
+) {
   let command: any;
   let tool: any;
   const handlers = new Map<string, (...args: any[]) => any>();
@@ -25,6 +30,9 @@ function harness() {
   const context = {
     schema: "unified-review.agent-context.v1",
     files: [{ path: "a.ts", raw_patch: "@@ -1 +1 @@" }],
+  };
+  const contextDiagnostics = options.contextDiagnostics ?? {
+    status: "exported",
   };
   const diagnostics = {
     status: "imported",
@@ -57,11 +65,13 @@ function harness() {
     readJsonIfExists: ((path: string) => {
       if (path.endsWith("selection.json")) return selection;
       if (path.endsWith("context.json")) return context;
+      if (path.endsWith("context-diagnostics.json")) return contextDiagnostics;
       if (path.endsWith("import-diagnostics.json")) return diagnostics;
       return undefined;
     }) as AiReviewDependencies["readJsonIfExists"],
     removeTempDir: (path) => removed.push(path),
-    runHeadlessNvim: async () => ({ exitCode: 0, stderr: "" }),
+    runHeadlessNvim: async () =>
+      options.headlessResult ?? { exitCode: 0, stderr: "" },
     runInteractiveNvim: async () => {
       interactiveRuns++;
       return { exitCode: 0, stderr: "" };
@@ -104,10 +114,11 @@ test("/ai-review exports context, queues review, imports feedback, and settles",
   assert.equal(instance.messages.length, 1);
   assert.match(instance.messages[0].content, /"path": "a\.ts"/);
   assert.deepEqual(instance.messages[0].options, { deliverAs: "followUp" });
-  assert.match(
-    instance.writes.get("/tmp/ai-review-test/context-init.lua") ?? "",
-    /write_context/,
-  );
+  const contextInit =
+    instance.writes.get("/tmp/ai-review-test/context-init.lua") ?? "";
+  assert.match(contextInit, /write_context/);
+  assert.match(contextInit, /context-diagnostics\.json/);
+  assert.match(contextInit, /cquit/);
 
   const result = await instance.tool.execute(
     "tool-call",
@@ -139,6 +150,28 @@ test("/ai-review exports context, queues review, imports feedback, and settles",
   await instance.handlers.get("agent_settled")?.({}, instance.ctx);
   assert.deepEqual(instance.removed, ["/tmp/ai-review-test"]);
   assert.equal(instance.interactiveRuns, 1);
+});
+
+test("/ai-review reports context export diagnostics", async () => {
+  const instance = harness({
+    contextDiagnostics: {
+      status: "error",
+      message: "failed to resolve review target",
+    },
+    headlessResult: { exitCode: 1, stderr: "" },
+  });
+
+  await instance.command.handler("", instance.ctx);
+
+  assert.equal(instance.messages.length, 0);
+  assert.equal(instance.notifications.length, 1);
+  assert.match(
+    instance.notifications[0][0],
+    /message: failed to resolve review target/,
+  );
+  assert.match(instance.notifications[0][0], /Temp files retained/);
+  assert.equal(instance.notifications[0][1], "error");
+  assert.deepEqual(instance.removed, []);
 });
 
 test("feedback submission fails by throwing when no review is active", async () => {

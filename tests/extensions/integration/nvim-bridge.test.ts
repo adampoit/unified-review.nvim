@@ -54,8 +54,12 @@ test("generated pi bridge scripts export context and import feedback through rea
       range_kind: "two_dot",
     };
     const contextPath = join(workspace, "context.json");
+    const contextDiagnosticsPath = join(workspace, "context-diagnostics.json");
     const contextInitPath = join(workspace, "context-init.lua");
-    writeFileSync(contextInitPath, buildContextInit(contextPath, target));
+    writeFileSync(
+      contextInitPath,
+      buildContextInit(contextPath, target, contextDiagnosticsPath),
+    );
 
     const contextResult = runNvim(repo, stateDir, contextInitPath);
     assert.equal(
@@ -63,10 +67,35 @@ test("generated pi bridge scripts export context and import feedback through rea
       0,
       `${contextResult.stdout}\n${contextResult.stderr}`,
     );
+    const contextDiagnostics = JSON.parse(
+      readFileSync(contextDiagnosticsPath, "utf8"),
+    );
+    assert.equal(contextDiagnostics.status, "exported");
     const context = JSON.parse(readFileSync(contextPath, "utf8"));
     assert.equal(context.schema, "unified-review.agent-context.v1");
     assert.equal(context.files[0].path, "example.lua");
     assert.match(context.files[0].raw_patch, /return 2/);
+
+    const failedContextDiagnosticsPath = join(
+      workspace,
+      "failed-context-diagnostics.json",
+    );
+    const failedContextInitPath = join(workspace, "failed-context-init.lua");
+    writeFileSync(
+      failedContextInitPath,
+      buildContextInit(
+        join(workspace, "failed-context.json"),
+        { ...target, base: "missing-ref" },
+        failedContextDiagnosticsPath,
+      ),
+    );
+    const failedContextResult = runNvim(repo, stateDir, failedContextInitPath);
+    assert.notEqual(failedContextResult.status, 0);
+    const failedContextDiagnostics = JSON.parse(
+      readFileSync(failedContextDiagnosticsPath, "utf8"),
+    );
+    assert.equal(failedContextDiagnostics.status, "error");
+    assert.match(failedContextDiagnostics.message, /Needed a single revision/);
 
     const feedbackPath = join(workspace, "feedback.json");
     const diagnosticsPath = join(workspace, "import-diagnostics.json");

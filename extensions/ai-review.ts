@@ -26,9 +26,14 @@ import {
   writeText,
 } from "./lib/nvim.ts";
 
-export type ImportDiagnostics = {
+export type NvimDiagnostics = {
   status?: string;
   message?: string;
+  v_errmsg?: string;
+  messages?: string;
+};
+
+export type ImportDiagnostics = NvimDiagnostics & {
   result?: {
     imported_threads?: number;
     imported_comments?: number;
@@ -37,8 +42,6 @@ export type ImportDiagnostics = {
     warnings?: unknown[];
     session_id?: string;
   };
-  v_errmsg?: string;
-  messages?: string;
 };
 
 type ReviewWorkspace = {
@@ -77,7 +80,7 @@ const defaultDependencies: AiReviewDependencies = {
 
 export function nvimExitSummary(
   result: NvimRunResult,
-  diagnostics?: ImportDiagnostics,
+  diagnostics?: NvimDiagnostics,
 ): string {
   const details = [
     result.signal
@@ -269,6 +272,7 @@ export function registerAiReviewExtension(
       const tempDir = dependencies.createTempDir("pi-ai-review-");
       const selectionPath = join(tempDir, "selection.json");
       const contextPath = join(tempDir, "context.json");
+      const contextDiagnosticsPath = join(tempDir, "context-diagnostics.json");
       const feedbackPath = join(tempDir, "feedback.json");
       const importDiagnosticsPath = join(tempDir, "import-diagnostics.json");
       let keepTempDir = false;
@@ -307,17 +311,28 @@ export function registerAiReviewExtension(
         const contextInitPath = join(tempDir, "context-init.lua");
         dependencies.writeText(
           contextInitPath,
-          buildContextInit(contextPath, selectionValue.target),
+          buildContextInit(
+            contextPath,
+            selectionValue.target,
+            contextDiagnosticsPath,
+          ),
         );
         const contextResult = await dependencies.runHeadlessNvim(
           pi,
           ctx.cwd,
           contextInitPath,
         );
-        if (contextResult.exitCode !== 0) {
+        const contextDiagnostics =
+          dependencies.readJsonIfExists<NvimDiagnostics>(
+            contextDiagnosticsPath,
+          );
+        if (
+          contextResult.exitCode !== 0 ||
+          contextDiagnostics?.status === "error"
+        ) {
           keepTempDir = true;
           ctx.ui.notify(
-            `Failed to export AI review context. Temp files retained in ${tempDir}.`,
+            `Failed to export AI review context.\n${nvimExitSummary(contextResult, contextDiagnostics)}\nTemp files retained in ${tempDir}.`,
             "error",
           );
           return;

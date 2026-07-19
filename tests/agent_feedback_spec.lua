@@ -106,4 +106,50 @@ describe("agent feedback", function()
 		assert.are.equal("a.lua", context.files[1].path)
 		assert.are.equal("@@ -1 +1 @@", context.files[1].raw_patch)
 	end)
+
+	it("does not finish selection when writing the artifact fails", function()
+		local target_discovery = require("unified_review.session.target_discovery")
+		local target_picker = require("unified_review.ui.target_picker")
+		local original_discover = target_discovery.discover
+		local original_open = target_picker.open
+		local original_notify = vim.notify
+		local original_cmd = vim.cmd
+		local notification
+		local selected = false
+		local quit = false
+
+		rawset(target_discovery, "discover", function()
+			return {}, nil
+		end)
+		rawset(target_picker, "open", function(opts)
+			opts.on_select({ kind = "local_git" }, { label = "Current change" })
+			return true
+		end)
+		rawset(vim, "notify", function(message, level)
+			notification = { message = message, level = level }
+		end)
+		rawset(vim, "cmd", function()
+			quit = true
+		end)
+
+		local ok, result = pcall(agent_feedback.select_target, {
+			path = vim.fn.tempname() .. "/selection.json",
+			quit = true,
+			on_select = function()
+				selected = true
+			end,
+		})
+
+		rawset(target_discovery, "discover", original_discover)
+		rawset(target_picker, "open", original_open)
+		rawset(vim, "notify", original_notify)
+		rawset(vim, "cmd", original_cmd)
+
+		assert.is_true(ok)
+		assert.is_true(result)
+		assert.is_false(selected)
+		assert.is_false(quit)
+		assert.are.equal(vim.log.levels.ERROR, notification.level)
+		assert.matches("failed to write JSON file", notification.message)
+	end)
 end)

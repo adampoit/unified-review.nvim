@@ -65,16 +65,34 @@ export function buildReviewExportInit(
   );
 }
 
-export function buildContextInit(path: string, target: unknown): string {
+export function buildContextInit(
+  path: string,
+  target: unknown,
+  diagnosticsPath?: string,
+): string {
   return [
     `local context_path = ${luaString(path)}`,
+    `local diagnostics_path = ${diagnosticsPath ? luaString(diagnosticsPath) : "nil"}`,
     `local target = ${luaJson(target)}`,
-    "local agent_feedback = require('unified_review.agent_feedback')",
-    "local result, err = agent_feedback.write_context(context_path, { target = target })",
-    "if not result then",
-    "  error(err and err.message or 'failed to write agent context')",
+    "local function collect_messages()",
+    "  local ok, result = pcall(vim.api.nvim_exec2, 'messages', { output = true })",
+    "  return ok and result.output or ''",
     "end",
-    "vim.cmd('qa')",
+    "local function write_diagnostics(status, fields)",
+    "  if not diagnostics_path or diagnostics_path == '' then return end",
+    "  fields = fields or {}",
+    "  fields.status = status",
+    "  fields.v_errmsg = vim.v.errmsg",
+    "  fields.messages = collect_messages()",
+    "  pcall(vim.fn.writefile, { vim.json.encode(fields) }, diagnostics_path)",
+    "end",
+    "local ok, result_or_err = pcall(function()",
+    "  local result, err = require('unified_review.agent_feedback').write_context(context_path, { target = target })",
+    "  if not result then error(err and err.message or 'failed to write agent context') end",
+    "  return result",
+    "end)",
+    "if ok then write_diagnostics('exported', { result = result_or_err }) else write_diagnostics('error', { message = tostring(result_or_err) }) end",
+    "vim.cmd(ok and 'qa' or 'cquit')",
   ].join("\n");
 }
 
@@ -104,7 +122,7 @@ export function buildImportInit(
     "  return result",
     "end)",
     "if ok then write('imported', { result = result_or_err }) else write('error', { message = tostring(result_or_err) }) end",
-    "vim.cmd(ok and 'qa' or 'cqa')",
+    "vim.cmd(ok and 'qa' or 'cquit')",
   ].join("\n");
 }
 
