@@ -37,6 +37,34 @@ local function is_local_worktree_target(target)
 	return target and (target.render_strategy == "local_worktree" or target.local_worktree == true)
 end
 
+local function resolve_jj_context(target)
+	target = vim.deepcopy(target or {})
+	local cwd = target.cwd or target.root or vim.loop.cwd()
+	local probe = target.local_root or cwd
+	if not probe or not vim.loop.fs_stat(probe) then
+		return target, cwd
+	end
+	local ok_jj, jj = pcall(require, "unified_review.integrations.jj")
+	if not ok_jj then
+		return target, cwd
+	end
+	local workspace_root = jj.workspace_root(probe)
+	if not workspace_root then
+		return target, cwd
+	end
+	local git_root = jj.git_root(workspace_root)
+	if git_root and git_root ~= "" then
+		cwd = git_root
+		target.cwd = git_root
+		target.git_root = target.git_root or git_root
+	end
+	if is_local_worktree_target(target) then
+		target.local_provider = target.local_provider or "jj"
+		target.local_root = target.local_root or workspace_root
+	end
+	return target, cwd
+end
+
 local function session_id(target)
 	local prefix = is_local_worktree_target(target) and "github-local" or "github"
 	return table.concat({ prefix, target.owner or "", target.repo or "", tostring(target.number or "") }, ":")
@@ -307,7 +335,7 @@ local function build_local_worktree_result(target, cwd, pr, remote_patch, local_
 		base_oid = resolved.base_oid,
 		head_oid = opts.head_oid or resolved.head_oid,
 		render_base_oid = resolved.base_oid,
-		render_head_oid = opts.head_oid or resolved.head_oid,
+		render_head_oid = "WORKING",
 		metadata = vim.tbl_extend("force", target.metadata or {}, {
 			github = pr,
 			github_base_oid = pr.base_ref_oid,
@@ -323,8 +351,8 @@ local function build_local_worktree_result(target, cwd, pr, remote_patch, local_
 		target = normalized_target,
 		files = local_session.files,
 		raw_patch = local_session.raw_patch,
-		editable = false,
-		read_only = true,
+		editable = true,
+		read_only = false,
 		threads = {},
 		metadata = {
 			github = pr,
@@ -375,7 +403,7 @@ local function build_git_local_worktree_session(target, cwd, pr, remote_patch)
 		base = base,
 		head = "WORKING",
 		range_kind = target.local_range_kind or target.range_kind or "working_tree_three_dot",
-		editable = false,
+		editable = true,
 	})
 	if not local_session then
 		return nil, local_worktree_session_error(local_err)
@@ -438,9 +466,9 @@ local function build_session(target, cwd, pr, patch, files, render_root, render_
 end
 
 function M.open(target)
-	target = target or {}
+	local cwd
+	target, cwd = resolve_jj_context(target)
 	local github_cfg = config.options.github or config.defaults.github
-	local cwd = target.cwd or target.root or vim.loop.cwd()
 	local pr_ref = target.url or target.number or target.pr or target.ref
 	if not gh.available(github_cfg.transport_command) then
 		return nil, { message = "gh executable not found" }
@@ -481,9 +509,9 @@ function M.open(target)
 end
 
 function M.open_async(target, callback)
-	target = target or {}
+	local cwd
+	target, cwd = resolve_jj_context(target)
 	local github_cfg = config.options.github or config.defaults.github
-	local cwd = target.cwd or target.root or vim.loop.cwd()
 	local pr_ref = target.url or target.number or target.pr or target.ref
 	if not gh.available(github_cfg.transport_command) then
 		vim.schedule(function()

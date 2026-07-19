@@ -725,7 +725,7 @@ end
 local function load_prs(state)
 	local disc = state.discovery or {}
 	local opts = {
-		cwd = disc.root or disc.cwd,
+		cwd = disc.git_root or disc.root or disc.cwd,
 		root = disc.root,
 		limit = state.pr_limit or 50,
 	}
@@ -752,9 +752,11 @@ local function select_current(state)
 		local disc = state.discovery or {}
 		local normalizer = state.custom_kind == "github_pr" and discovery.normalize_github_pr
 			or discovery.normalize_custom
+		local target_cwd = state.custom_kind == "github_pr" and (disc.git_root or disc.root or disc.cwd)
+			or (disc.root or disc.cwd)
 		local target, err = normalizer(state.custom_input, {
 			mode = disc.mode,
-			cwd = disc.root or disc.cwd,
+			cwd = target_cwd,
 			root = disc.root,
 			git_root = disc.git_root,
 		})

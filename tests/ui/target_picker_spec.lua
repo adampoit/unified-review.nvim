@@ -260,9 +260,11 @@ describe("target picker rendering", function()
 		assert.are.equal("origin/main", selected.base)
 	end)
 
-	it("supports selecting an open GitHub PR from the target list", function()
+	it("uses the backing Git root when selecting a PR from an additional jj workspace", function()
 		local selected
-		rawset(discovery, "open_pull_requests", function()
+		local requested_opts
+		rawset(discovery, "open_pull_requests", function(opts)
+			requested_opts = opts
 			return {
 				{
 					number = 123,
@@ -281,6 +283,9 @@ describe("target picker rendering", function()
 				nil
 		end)
 		local disc = discovery_for_open()
+		disc.mode = "jj"
+		disc.root = "/repo/workspaces/feature"
+		disc.git_root = "/repo/.git"
 		table.insert(
 			disc.items,
 			2,
@@ -309,6 +314,7 @@ describe("target picker rendering", function()
 		press(state, "<CR>")
 
 		assert.is_not_nil(selected)
+		assert.are.equal("/repo/.git", requested_opts.cwd)
 		assert.are.equal("github_pr", selected.kind)
 		assert.are.equal(123, selected.number)
 	end)

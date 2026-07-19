@@ -1,6 +1,7 @@
 local provider = require("unified_review.providers.diff.github_pr")
 local diff_builder = require("helpers.diff_builder")
 local git_repo = require("helpers.git_repo")
+local jj_repo = require("helpers.jj_repo")
 
 local patch = diff_builder.diff({
 	diff_builder.file("src/right-longer-replacement.txt", {
@@ -105,18 +106,86 @@ describe("GitHub PR diff provider", function()
 
 			assert.are.equal("github_pr", session.provider)
 			assert.are.equal("github-local:acme:widgets:42", session.id)
-			assert.is_false(session.editable)
-			assert.is_true(session.read_only)
+			assert.is_true(session.editable)
+			assert.is_false(session.read_only)
 			assert.are.equal(
 				vim.loop.fs_realpath(root) or root,
 				vim.loop.fs_realpath(session.target.root) or session.target.root
 			)
 			assert.are.equal("local_worktree", session.target.render_strategy)
 			assert.are.equal("WORKING", session.target.head_oid)
+			assert.are.equal("WORKING", session.target.render_head_oid)
 			assert.are.equal(1, #session.files)
 			assert.are.equal("a.lua", session.files[1].path)
 			assert.are.equal("return 2", session.files[1].hunks[1].lines[2].text)
 			assert.are.equal(1, #session.metadata.github_remote_files)
+		end)
+		gh.available = original_available
+		gh.pr_view = original_pr_view
+		gh.pr_diff = original_pr_diff
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("resolves GitHub and local review context from an additional jj workspace", function()
+		local gh = require("unified_review.integrations.gh")
+		local original_available = gh.available
+		local original_pr_view = gh.pr_view
+		local original_pr_diff = gh.pr_diff
+		local root = jj_repo.create()
+		jj_repo.write(root, "a.lua", { "return 1" })
+		jj_repo.describe(root, "base")
+		jj_repo.remote_bookmark(root, "main", "@")
+		local workspace = jj_repo.add_workspace(root)
+		jj_repo.write(workspace, "a.lua", { "return 2" })
+		jj_repo.describe(workspace, "workspace change")
+		local git_root = jj_repo.run(workspace, { "git", "root" }):gsub("%s+$", "")
+		local remote_patch = diff_builder.diff({
+			diff_builder.file("a.lua", {
+				diff_builder.del("return 1", 1),
+				diff_builder.add("return 2", 1),
+			}),
+		}).patch
+		local requested_cwds = {}
+		local ok, err = pcall(function()
+			rawset(gh, "available", function()
+				return true
+			end)
+			rawset(gh, "pr_view", function(cwd)
+				table.insert(requested_cwds, cwd)
+				return {
+					id = "PR_kw123",
+					owner = "acme",
+					repo = "widgets",
+					number = 42,
+					url = "https://github.com/acme/widgets/pull/42",
+					title = "Add widgets",
+					base_ref = "main",
+					head_ref = "feature",
+					base_ref_oid = "baseoid",
+					head_ref_oid = "headoid",
+				},
+					nil
+			end)
+			rawset(gh, "pr_diff", function(cwd)
+				table.insert(requested_cwds, cwd)
+				return remote_patch, nil
+			end)
+
+			local session = assert(provider.open({
+				kind = "github_pr",
+				number = 42,
+				cwd = workspace,
+				render_strategy = "local_worktree",
+			}))
+
+			assert.is_nil(vim.loop.fs_stat(workspace .. "/.git"))
+			assert.are.equal(vim.loop.fs_realpath(git_root), vim.loop.fs_realpath(requested_cwds[1]))
+			assert.are.equal(vim.loop.fs_realpath(git_root), vim.loop.fs_realpath(requested_cwds[2]))
+			assert.are.equal(vim.loop.fs_realpath(workspace), vim.loop.fs_realpath(session.target.root))
+			assert.are.equal("jj", session.target.local_provider)
+			assert.are.equal("return 2", session.files[1].hunks[1].lines[2].text)
 		end)
 		gh.available = original_available
 		gh.pr_view = original_pr_view
@@ -193,6 +262,9 @@ describe("GitHub PR diff provider", function()
 			assert.are.equal("local_worktree", session.target.render_strategy)
 			assert.are.equal("/workspace", session.target.root)
 			assert.are.equal("working-copy-oid", session.target.head_oid)
+			assert.are.equal("WORKING", session.target.render_head_oid)
+			assert.is_true(session.editable)
+			assert.is_false(session.read_only)
 			assert.are.equal(1, #session.metadata.github_remote_files)
 		end)
 		gh.available = original_available
