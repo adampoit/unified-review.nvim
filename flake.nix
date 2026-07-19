@@ -68,7 +68,7 @@
         component-test-runner = pkgs.writeShellScript "unified-review-component-tests" (with-test-env component-test-command);
         test-nvim = pkgs.writeShellScript "unified-review-test-nvim" (with-test-env ''
           exec ${nvim-with-deps}/bin/nvim -n -u ${plugin-src}/tests/minimal_init.lua \
-            -c "lua require('unified_review').setup({})"
+            -c "lua require('unified_review').setup({})" "$@"
         '');
       in {
         packages.default = nvim-with-deps;
@@ -110,18 +110,19 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            nvim-with-deps
             pkgs.git
             pkgs.jujutsu
             pkgs.nodejs_22
           ];
           PLENARY_PATH = "${pkgs.vimPlugins.plenary-nvim}";
           CODEDIFF_PATH = "${pkgs.vimPlugins.codediff-nvim}";
+          NVIM_BIN = "${nvim-with-deps}/bin/nvim";
           shellHook = ''
             echo "unified-review test shell"
             echo "  All tests:   scripts/test.sh all"
             echo "  Test suites: scripts/test.sh --help"
-            echo "  Single spec: nvim --headless -n -u tests/minimal_init.lua +'lua require(\"plenary.busted\").run(\"tests/ui/thread_panel_spec.lua\")'"
+            echo "  Test Neovim: nix run .#test-nvim"
+            echo "  Single spec: nix run .#test-nvim -- --headless +'lua require(\"plenary.busted\").run(\"tests/ui/thread_panel_spec.lua\")'"
           '';
         };
       }
