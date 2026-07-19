@@ -1,0 +1,30 @@
+conventions:
+  - path: Faithlife/CodingGuidelines/conventions/editorconfig-root
+  - path: Faithlife/CodingGuidelines/conventions/editorconfig-json
+  - path: Faithlife/CodingGuidelines/conventions/editorconfig-md
+  - path: Faithlife/CodingGuidelines/conventions/editorconfig-yaml
+  - path: adampoit/conventions/gitattributes
+  - path: adampoit/conventions/gitignore-node
+  - path: adampoit/conventions/gitignore-nix
+  - path: adampoit/conventions/prettier-config
+  - path: adampoit/conventions/nix-direnv
+  - path: adampoit/conventions/renovate
+    settings:
+      managers:
+        - github-actions
+        - npm
+        - nix
+  - path: adampoit/conventions/github-settings
+  - path: Faithlife/CodingGuidelines/conventions/prettierignore-section
+    settings:
+      name: generated
+      text: |
+        dist/
+        node_modules/
+        package-lock.json
+  - path: adampoit/conventions/repo-conventions-workflow
+  - path: adampoit/conventions/license-mit
+
+pull-request:
+  labels:
+    - automation
