@@ -17,6 +17,7 @@ A Neovim plugin for reviewing local changes, jj changes, and GitHub pull request
 - Thread panel with filtering, preview, reply, resolve/reopen, and delete actions
 - Markdown/minimal review summary export
 - Optional GitHub pending-review submission and local-draft publishing
+- Scriptable agent-feedback import and diff-context export
 
 ## Requirements
 
@@ -83,8 +84,84 @@ Packer users: adapt the above with `use({ ... })` and `requires = { ... }`.
 | `:UnifiedReview current`                | Open the current jj change or Git working target    |
 | `:UnifiedReview pr [number\|url]`       | Open an explicit PR, or infer the current branch PR |
 | `:UnifiedReview pr-local [number\|url]` | Open PR comments with local worktree on the right   |
+| `:UnifiedReview import-feedback <json>` | Import agent feedback JSON as draft comments        |
+| `:UnifiedReview agent-select <json>`    | Pick a review target and write selection JSON       |
+| `:UnifiedReview agent-context <json>`   | Write diff context JSON for agents                  |
 
-Run `:UnifiedReview help` for the full list: `pr-local`, `comment`, `reply`, `threads`, `summary`, `save`, `submit`, `publish-drafts`, `toggle-export`, `resolve-thread`, `reopen-thread`, `edit-draft`, `delete-draft`, `clear`, `undo`, `status`, `close`.
+Run `:UnifiedReview help` for the full list: `pr-local`, `comment`, `reply`, `threads`, `summary`, `save`, `submit`, `publish-drafts`, `import-feedback`, `agent-select`, `agent-context`, `toggle-export`, `resolve-thread`, `reopen-thread`, `edit-draft`, `delete-draft`, `clear`, `undo`, `status`, `close`.
+
+## Agent feedback
+
+Agents can submit review feedback without knowing Neovim UI internals by writing `unified-review.agent-feedback.v1` JSON and importing it:
+
+```vim
+:UnifiedReview import-feedback /tmp/agent-review.json
+```
+
+Headless scripts can use the Lua API directly:
+
+```sh
+nvim --headless +'lua require("unified_review.agent_feedback").import_file("/tmp/agent-review.json", { target = "current", refresh_ui = false })' +qa
+```
+
+The JSON shape is:
+
+```json
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "author": "pi-agent",
+  "source": { "name": "pi-coding-agent", "run_id": "optional-run-id" },
+  "summary": "Optional overall review summary.",
+  "comments": [
+    {
+      "id": "stable-comment-id",
+      "body": "This can panic when config is nil.",
+      "severity": "warning",
+      "category": "bug",
+      "target": {
+        "kind": "line",
+        "path": "lua/example.lua",
+        "side": "right",
+        "line": 42
+      }
+    }
+  ]
+}
+```
+
+Supported targets are `file`, `line`, and `range`, matching the normal comment target model. Imported comments are local drafts, marked for export, and deduplicated when `source.name`, `source.run_id`, and `comment.id` are all present.
+
+For agent workflows that start in Neovim's target picker:
+
+```vim
+:UnifiedReview agent-select /tmp/unified-review-selection.json
+:UnifiedReview agent-context /tmp/unified-review-context.json
+```
+
+`agent-select` writes the chosen target artifact and exits; `agent-context` writes a diff-focused, line-addressable context artifact for the current target.
+
+## pi integration
+
+This repository also ships two [pi](https://github.com/earendil-works/pi-mono) extensions:
+
+- `/review` opens Neovim for a human review and inserts the exported feedback into pi's editor.
+- `/ai-review` selects a target in Neovim, asks the agent for structured feedback, imports it as local drafts, and offers to reopen the review.
+
+Try the extensions directly from a checkout:
+
+```sh
+pi -e .
+```
+
+Tagged releases can be installed as a pi git package:
+
+```sh
+pi install git:github.com/adampoit/unified-review.nvim@<tag>
+```
+
+For local development, `pi install /absolute/path/to/unified-review` can register the checkout persistently. Remove any standalone copies of `diff-review.ts` and `ai-review.ts` first so pi does not register duplicate commands.
+
+Both workflows require `nvim` on `PATH` and `unified-review.nvim` configured in the Neovim instance launched by pi. The extensions and Lua plugin communicate only through the versioned selection, context, and feedback JSON artifacts documented above.
 
 ## Default keymaps
 
@@ -161,12 +238,16 @@ Each thread records a **content anchor** so comments survive rebases and edits:
 Common commands:
 
 ```sh
-nix run .                 # all Lua/plenary tests
-nix run .#test-plugin     # plugin tests, excluding component specs
-nix run .#test-components # component specs
-npm run test:e2e          # TUI E2E plugin + component/storybook tests
-nix flake check           # standard flake validation
+scripts/test.sh all         # full validation
+scripts/test.sh typecheck   # TypeScript typecheck
+scripts/test.sh lua         # all Lua/plenary tests
+scripts/test.sh pi-unit     # pi extension unit tests
+scripts/test.sh pi-bridge   # real pi/Neovim bridge integration
+scripts/test.sh tui         # plugin + component TUI tests
+scripts/test.sh --help      # all suites and options
 ```
+
+`npm test` is a conventional shim for `scripts/test.sh`; pass a suite with `npm test -- pi-unit`, for example.
 
 ## License
 

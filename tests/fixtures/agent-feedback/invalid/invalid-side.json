@@ -1,0 +1,14 @@
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "comments": [
+    {
+      "body": "Invalid side.",
+      "target": {
+        "kind": "line",
+        "path": "lua/example.lua",
+        "side": "center",
+        "line": 1
+      }
+    }
+  ]
+}

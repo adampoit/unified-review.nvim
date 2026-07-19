@@ -1,0 +1,13 @@
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "comments": [
+    {
+      "body": "Invalid severity.",
+      "severity": "critical",
+      "target": {
+        "kind": "file",
+        "path": "lua/example.lua"
+      }
+    }
+  ]
+}

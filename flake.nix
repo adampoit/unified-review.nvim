@@ -119,12 +119,9 @@
           CODEDIFF_PATH = "${pkgs.vimPlugins.codediff-nvim}";
           shellHook = ''
             echo "unified-review test shell"
-            echo "  Tests:       nix flake check"
-            echo "  Run tests:   nix run ."
-            echo "  Plugin:      nix run .#test-plugin"
-            echo "  Components:  nix run .#test-components"
+            echo "  All tests:   scripts/test.sh all"
+            echo "  Test suites: scripts/test.sh --help"
             echo "  Single spec: nvim --headless -n -u tests/minimal_init.lua +'lua require(\"plenary.busted\").run(\"tests/ui/thread_panel_spec.lua\")'"
-            echo "  E2E tests:   npm ci && npm run test:e2e"
           '';
         };
       }

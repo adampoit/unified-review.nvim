@@ -1,21 +1,36 @@
 {
+  "name": "unified-review",
+  "version": "0.0.0",
   "private": true,
+  "description": "Unified local code review for Neovim and pi",
+  "license": "MIT",
+  "repository": "github:adampoit/unified-review.nvim",
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "neovim",
+    "code-review"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/diff-review.ts",
+      "./extensions/ai-review.ts"
+    ]
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "npm run test:e2e",
-    "test:e2e": "npm run test:e2e:plugin && npm run test:e2e:components",
-    "test:e2e:plugin": "nix develop -c npm exec -- tui-test tests/e2e/target-picker.test.ts tests/e2e/thread-panel.test.ts tests/e2e/comments/*.test.ts",
-    "test:e2e:components": "nix develop -c npm exec -- tui-test tests/storybook/*.test.ts",
-    "test:storybook": "npm run test:e2e:components",
-    "test:e2e:artifacts": "npm run test:e2e:plugin:artifacts && npm run test:e2e:components:artifacts",
-    "test:e2e:plugin:artifacts": "UNIFIED_REVIEW_E2E_ARTIFACTS=1 nix develop -c npm exec -- tui-test tests/e2e/target-picker.test.ts tests/e2e/thread-panel.test.ts tests/e2e/comments/*.test.ts",
-    "test:e2e:components:artifacts": "UNIFIED_REVIEW_E2E_ARTIFACTS=1 nix develop -c npm exec -- tui-test tests/storybook/*.test.ts",
-    "test:storybook:artifacts": "npm run test:e2e:components:artifacts"
+    "test": "scripts/test.sh"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.80.10",
     "@microsoft/tui-test": "0.0.4",
     "@types/node": "^26.0.0",
+    "typebox": "^1.1.38",
     "typescript": "^5.0.0"
   }
 }

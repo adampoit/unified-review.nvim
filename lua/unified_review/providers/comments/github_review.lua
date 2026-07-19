@@ -425,13 +425,15 @@ function M.list_threads(session, path)
 	return threads
 end
 
-function M.create_thread(session, target, body)
-	local metadata = { export = true }
+function M.create_thread(session, target, body, opts)
+	opts = opts or {}
+	local metadata = vim.tbl_deep_extend("force", { export = true }, opts.metadata or {})
 	if is_local_worktree_session(session) then
 		metadata.github_local_worktree = true
 		metadata.publish_note = "This draft can publish only after its target line exists in the remote PR diff."
 	end
-	local thread, err = local_store.create_thread(session, target, body, { metadata = metadata })
+	local thread, err =
+		local_store.create_thread(session, target, body, vim.tbl_extend("force", opts, { metadata = metadata }))
 	if not thread then
 		return nil, err
 	end

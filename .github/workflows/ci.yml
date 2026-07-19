@@ -57,8 +57,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Typecheck TypeScript tests
-        run: npm run typecheck
+      - name: Typecheck TypeScript
+        run: scripts/test.sh typecheck
+
+      - name: Run pi extension unit tests
+        run: scripts/test.sh pi-unit
+
+      - name: Run pi/Neovim bridge integration test
+        run: scripts/test.sh pi-bridge
 
       - name: Run TUI E2E tests
-        run: npm run test:e2e
+        run: scripts/test.sh tui

@@ -326,6 +326,60 @@ local function review_status()
 	vim.notify(status.format(session), vim.log.levels.INFO, { title = "unified-review" })
 end
 
+local function review_import_feedback(command)
+	local args = command.fargs or {}
+	local path = args[1]
+	local result, err = require("unified_review.agent_feedback").import_file(path, { target = "current" })
+	if not result then
+		vim.notify(
+			err and err.message or "failed to import agent feedback",
+			vim.log.levels.ERROR,
+			{ title = "unified-review" }
+		)
+		return
+	end
+	vim.notify(
+		string.format(
+			"Imported %d agent comment(s), updated %d, skipped %d",
+			result.imported_comments or 0,
+			result.updated_threads or 0,
+			#(result.skipped or {})
+		),
+		#(result.skipped or {}) > 0 and vim.log.levels.WARN or vim.log.levels.INFO,
+		{ title = "unified-review" }
+	)
+end
+
+local function review_agent_select(command)
+	local args = command.fargs or {}
+	local _, err = require("unified_review.agent_feedback").select_target({ path = args[1], quit = true })
+	if err then
+		vim.notify(
+			err.message or "failed to select agent review target",
+			vim.log.levels.ERROR,
+			{ title = "unified-review" }
+		)
+	end
+end
+
+local function review_agent_context(command)
+	local args = command.fargs or {}
+	local result, err = require("unified_review.agent_feedback").write_context(args[1], { target = "current" })
+	if not result then
+		vim.notify(
+			err and err.message or "failed to write agent review context",
+			vim.log.levels.ERROR,
+			{ title = "unified-review" }
+		)
+		return
+	end
+	vim.notify(
+		string.format("Wrote agent context for %d file(s) to %s", result.files or 0, result.path),
+		vim.log.levels.INFO,
+		{ title = "unified-review" }
+	)
+end
+
 local function review_debug_log(command)
 	local debug = require("unified_review.util.debug")
 	local action = ((command.fargs or {})[1] or "copy"):lower()
@@ -400,6 +454,9 @@ local function review_help()
 		":UnifiedReview summary                 open review summary buffer",
 		":UnifiedReview save [path] [format]    save marked threads as markdown or minimal text",
 		":UnifiedReview publish-drafts [pr]     publish drafts to a GitHub pending review",
+		":UnifiedReview import-feedback <json>  import agent feedback JSON",
+		":UnifiedReview agent-select <json>     select target and write selection JSON",
+		":UnifiedReview agent-context <json>    write diff context JSON for agents",
 		":UnifiedReview toggle-export [thread]  mark/unmark a thread for export",
 		":UnifiedReview status                  show review session status",
 		":UnifiedReview debug-log [copy|open|path|clear]  collect jump diagnostics",
@@ -453,6 +510,9 @@ local subcommands = {
 	threads = { callback = review_threads },
 	undo = { callback = review_undo },
 	status = { callback = review_status },
+	["import-feedback"] = { callback = review_import_feedback, complete = "file" },
+	["agent-select"] = { callback = review_agent_select, complete = "file" },
+	["agent-context"] = { callback = review_agent_context, complete = "file" },
 	["debug-log"] = { callback = review_debug_log },
 	debug = { callback = review_debug_log },
 	help = { callback = review_help },
@@ -475,6 +535,9 @@ local subcommand_names = {
 	"save",
 	"close",
 	"status",
+	"import-feedback",
+	"agent-select",
+	"agent-context",
 	"debug-log",
 	"debug",
 	"help",
@@ -518,7 +581,12 @@ end
 local function unified_review_complete(arglead, cmdline)
 	local words = vim.split(cmdline, "%s+", { trimempty = true })
 	local subcommand = words[2] and words[2]:lower()
-	if subcommand == "save" then
+	if
+		subcommand == "save"
+		or subcommand == "import-feedback"
+		or subcommand == "agent-select"
+		or subcommand == "agent-context"
+	then
 		return vim.fn.getcompletion(arglead, "file")
 	end
 	if subcommand == "local" or not subcommands[subcommand] then

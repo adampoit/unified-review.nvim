@@ -1,0 +1,12 @@
+{
+  "schema": "unified-review.agent-feedback.v1",
+  "comments": [
+    {
+      "body": "",
+      "target": {
+        "kind": "file",
+        "path": "lua/example.lua"
+      }
+    }
+  ]
+}
