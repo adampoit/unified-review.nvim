@@ -35,6 +35,25 @@ local function open_editor(opts)
 	return editor
 end
 
+local function has_keymap(buf, mode, lhs)
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+		if map.lhs == lhs then
+			return true
+		end
+	end
+	return false
+end
+
+local function call_keymap(buf, mode, lhs)
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+		if map.lhs == lhs then
+			map.callback()
+			return true
+		end
+	end
+	return false
+end
+
 describe("comment editor", function()
 	after_each(function()
 		comment_editor.close()
@@ -128,6 +147,22 @@ describe("comment editor", function()
 			assert.is_not_equal("s", map.lhs)
 			assert.is_not_equal("a", map.lhs)
 		end
+		assert.is_false(has_keymap(editor.buffer, "n", "<Esc>"))
+		assert.is_false(has_keymap(editor.buffer, "i", "<Esc>"))
+		assert.is_true(has_keymap(editor.buffer, "n", "q"))
+	end)
+
+	it("inherits spell checking and cancels with q from normal mode", function()
+		local session = temp_session()
+		state.set_active(session)
+		local editor = open_editor({ target = { kind = "file", path = "a.lua" } })
+
+		assert.are.equal("markdown", vim.bo[editor.buffer].filetype)
+		assert.is_true(vim.wo[editor.window].spell)
+		assert.is_false(vim.bo[editor.buffer].modified)
+		assert.is_true(call_keymap(editor.buffer, "n", "q"))
+		assert.is_false(vim.api.nvim_win_is_valid(editor.window))
+		assert.are.equal(0, #session.threads)
 	end)
 
 	it("expands within a bounded inline editor while preserving wrap settings", function()

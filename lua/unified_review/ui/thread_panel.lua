@@ -1,5 +1,6 @@
 --- Project-wide review overview buffer.
 local float = require("unified_review.ui.float")
+local composer_ui = require("unified_review.ui.composer")
 local ui = require("components")
 local renderer = require("components.renderer")
 local selection = require("unified_review.session.selection")
@@ -1270,12 +1271,10 @@ open_composer_window = function(session)
 	end
 
 	local buf = vim.api.nvim_create_buf(false, true)
-	vim.bo[buf].buftype = "acwrite"
-	vim.bo[buf].bufhidden = "wipe"
-	vim.bo[buf].swapfile = false
-	vim.bo[buf].filetype = "markdown"
-	pcall(vim.api.nvim_buf_set_name, buf, "unified-review://reply")
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, session._thread_composer.lines or { "" })
+	composer_ui.setup_buffer(buf, {
+		name = "unified-review://reply",
+		lines = session._thread_composer.lines,
+	})
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "win",
 		win = panel_win,
@@ -1300,17 +1299,20 @@ open_composer_window = function(session)
 	}) do
 		pcall(vim.api.nvim_set_option_value, name, value, { win = win, scope = "local" })
 	end
+	composer_ui.activate(buf)
 	ui_state.thread_panel_composer_buf = buf
 	ui_state.thread_panel_composer_win = win
 	local group = vim.api.nvim_create_augroup("unified_review_thread_reply_" .. tostring(buf), { clear = true })
 	ui_state.thread_panel_composer_group = group
 
-	vim.keymap.set({ "n", "i", "x" }, "<C-s>", function()
-		save_reply(session)
-	end, { buffer = buf, silent = true })
-	vim.keymap.set({ "n", "i" }, "<Esc>", function()
-		cancel_reply(session)
-	end, { buffer = buf, silent = true })
+	composer_ui.set_keymaps(buf, {
+		save = function()
+			save_reply(session)
+		end,
+		cancel = function()
+			cancel_reply(session)
+		end,
+	})
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		group = group,
 		buffer = buf,
@@ -1353,7 +1355,7 @@ local function footer_items(session)
 	if session._thread_composer then
 		return {
 			{ label = "C-s", text = "save reply" },
-			{ label = "Esc", text = "cancel" },
+			{ label = "q", text = "cancel" },
 		}
 	end
 	if session._thread_panel_help then

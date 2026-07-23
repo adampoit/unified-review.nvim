@@ -26,3 +26,10 @@ if not codediff_path or codediff_path == "" then
 	error("codediff.nvim not found; set CODEDIFF_PATH to the codediff.nvim checkout path")
 end
 vim.opt.runtimepath:append(codediff_path)
+
+vim.api.nvim_create_autocmd("FileType", {
+	pattern = "markdown",
+	callback = function()
+		vim.opt_local.spell = true
+	end,
+})

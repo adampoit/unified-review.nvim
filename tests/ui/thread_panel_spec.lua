@@ -15,6 +15,15 @@ local function call_normal_map(buf, lhs)
 	return false
 end
 
+local function has_keymap(buf, mode, lhs)
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+		if map.lhs == lhs then
+			return true
+		end
+	end
+	return false
+end
+
 local function has_comment_keymap(buf)
 	for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
 		if map.rhs == "<Cmd>UnifiedReview comment<CR>" then
@@ -319,6 +328,28 @@ describe("thread panel", function()
 		assert.is_nil(session.ui.thread_panel_buf)
 		assert.is_nil(session.ui.thread_panel_action_buf)
 		assert.is_nil(session.ui.thread_panel_action_win)
+	end)
+
+	it("opens replies as normal markdown buffers with inherited spell checking", function()
+		local session = make_session()
+		state.set_active(session)
+		thread_panel.open()
+
+		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "R"))
+		assert.is_true(vim.wait(100, function()
+			return session.ui.thread_panel_composer_buf ~= nil
+		end))
+		local buf = session.ui.thread_panel_composer_buf
+		local win = session.ui.thread_panel_composer_win
+
+		assert.are.equal("markdown", vim.bo[buf].filetype)
+		assert.is_true(vim.wo[win].spell)
+		assert.is_false(vim.bo[buf].modified)
+		assert.is_false(has_keymap(buf, "n", "<Esc>"))
+		assert.is_false(has_keymap(buf, "i", "<Esc>"))
+		assert.is_true(has_keymap(buf, "n", "q"))
+		assert.is_true(call_normal_map(buf, "q"))
+		assert.is_nil(session._thread_composer)
 	end)
 
 	it("moves selection with list-style navigation instead of cursor roaming", function()
