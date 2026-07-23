@@ -1,4 +1,5 @@
 import { expect, test } from '@microsoft/tui-test';
+import assert from 'node:assert/strict';
 import type { Terminal } from '@microsoft/tui-test/lib/terminal/term.js';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -66,7 +67,7 @@ async function openRealReview(terminal: Terminal) {
 async function createCommentAtCurrentLine(terminal: Terminal, body: string) {
 	terminal.write('\u001c\u000e');
 	terminal.write(':UnifiedReview comment\r');
-	await expect(terminal.getByText('<C-s> save · Esc cancel', { strict: false })).toBeVisible();
+	await expect(terminal.getByText('<C-s> save · q cancel', { strict: false })).toBeVisible();
 	await delay(50);
 	terminal.write(body);
 	await expect(terminal.getByText(body)).toBeVisible();
@@ -121,8 +122,20 @@ test('thread panel supports inline replies without opening another modal', async
 	terminal.write('inline e2e reply');
 	await expect(terminal.getByText('inline e2e reply', { strict: false })).toBeVisible();
 
-	terminal.write('\u001c\u000e');
-	terminal.write(":lua vim.api.nvim_feedkeys(vim.keycode('<C-s>'), 'x', false)\r");
+	terminal.write('\u001b');
+	const normalModeRows = await waitForBuffer(
+		terminal,
+		(visibleRows) =>
+			visibleRows.some((row) => row.includes('inline e2e reply')) &&
+			visibleRows.some((row) => row.includes('Reply')) &&
+			!visibleRows.some((row) => row.includes('-- INSERT --')),
+	);
+	assert.ok(
+		normalModeRows.some((row) => row.includes('Reply')),
+		'expected Escape to leave the reply editor open',
+	);
+
+	terminal.write('\u0013');
 	await waitForBuffer(
 		terminal,
 		(visibleRows) =>
@@ -286,8 +299,10 @@ test.describe('wide terminal layout', () => {
 		captureTerminal(terminal, 'thread panel - wide inline reply');
 
 		terminal.write('\u001b');
-		await expect(terminal.getByText('Reply')).not.toBeVisible();
+		await expect(terminal.getByText('Reply')).toBeVisible();
 		await expect(terminal.getByText('-- INSERT --', { strict: false })).not.toBeVisible();
+		terminal.write('q');
+		await expect(terminal.getByText('Reply')).not.toBeVisible();
 		await expect(terminal.getByText('Details')).toBeVisible();
 		terminal.write('q');
 	});

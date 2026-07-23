@@ -255,7 +255,7 @@ export async function createInlineCommentThroughEditor(
 		terminal,
 		`local s=require('unified_review.session.manager').active(); vim.api.nvim_set_current_win(s.ui.${winKey}); vim.api.nvim_win_set_cursor(s.ui.${winKey}, {${target.line}, 0}); vim.cmd('UnifiedReview comment')`,
 	);
-	await expect(terminal.getByText('<C-s> save · Esc cancel', { strict: false })).toBeVisible();
+	await expect(terminal.getByText('<C-s> save · q cancel', { strict: false })).toBeVisible();
 	await delay(50);
 	terminal.write(body);
 	await expect(terminal.getByText(body, { strict: false })).toBeVisible();

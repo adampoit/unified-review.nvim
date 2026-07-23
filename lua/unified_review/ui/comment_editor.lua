@@ -1,4 +1,5 @@
 local comment_target = require("unified_review.domain.comment_target")
+local composer = require("unified_review.ui.composer")
 local inline = require("unified_review.ui.inline")
 local manager = require("unified_review.session.manager")
 
@@ -78,13 +79,6 @@ local function editor_body_height(buf, width)
 	return math.min(max_height, math.max(4, rows))
 end
 
-local function set_buffer_options(buf)
-	vim.bo[buf].buftype = "acwrite"
-	vim.bo[buf].bufhidden = "wipe"
-	vim.bo[buf].swapfile = false
-	vim.bo[buf].filetype = "markdown"
-end
-
 local function set_window_options(win)
 	local options = {
 		wrap = true,
@@ -153,9 +147,10 @@ function M.open(opts)
 	pcall(vim.cmd, "normal! zz")
 
 	local buf = vim.api.nvim_create_buf(false, true)
-	set_buffer_options(buf)
-	pcall(vim.api.nvim_buf_set_name, buf, "unified-review://comment/" .. tostring((vim.uv or vim.loop).hrtime()))
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, opts.prefill or { "" })
+	composer.setup_buffer(buf, {
+		name = "unified-review://comment/" .. tostring((vim.uv or vim.loop).hrtime()),
+		lines = opts.prefill,
+	})
 
 	local editor = {
 		target = target,
@@ -178,7 +173,7 @@ function M.open(opts)
 	end
 
 	local title_text = opts.thread_id and "Reply" or ("Comment · " .. comment_target.label(target))
-	local footer_text = " <C-s> save · Esc cancel "
+	local footer_text = " <C-s> save · q cancel "
 	local closing = false
 	local saved = false
 	local autocmd_group
@@ -241,6 +236,7 @@ function M.open(opts)
 	end
 	editor_win = vim.api.nvim_open_win(buf, true, config)
 	set_window_options(editor_win)
+	composer.activate(buf)
 
 	local function close_editor()
 		if closing then
@@ -319,9 +315,10 @@ function M.open(opts)
 		close_editor()
 	end
 
-	vim.keymap.set("n", "q", cancel, { buffer = buf, silent = true })
-	vim.keymap.set({ "n", "i" }, "<Esc>", cancel, { buffer = buf, silent = true })
-	vim.keymap.set({ "n", "i", "x" }, "<C-s>", save, { buffer = buf, silent = true })
+	composer.set_keymaps(buf, {
+		save = save,
+		cancel = cancel,
+	})
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		buffer = buf,
 		callback = function()

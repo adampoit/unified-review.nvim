@@ -24,7 +24,7 @@ test.describe('comment editor workflow inline rendering', () => {
 			terminal,
 			"local s=require('unified_review.session.manager').active(); vim.api.nvim_set_current_win(s.ui.right_window); vim.api.nvim_win_set_cursor(s.ui.right_window, {2, 0}); vim.cmd('UnifiedReview comment')",
 		);
-		await expect(terminal.getByText('<C-s> save · Esc cancel', { strict: false })).toBeVisible();
+		await expect(terminal.getByText('<C-s> save · q cancel', { strict: false })).toBeVisible();
 
 		const rows = await waitForBuffer(
 			terminal,
@@ -39,10 +39,10 @@ test.describe('comment editor workflow inline rendering', () => {
 		assert.ok(editorRow > targetRow, 'expected the editor below its target');
 		assert.ok(rows[editorRow].includes('╱'), 'expected an aligned spacer opposite the editor');
 
-		terminal.write('\u001b');
+		terminal.write('\u001bq');
 	});
 
-	test('saving from insert mode returns focus to the diff in normal mode', async ({ terminal }) => {
+	test('escape leaves the comment open in normal mode before saving', async ({ terminal }) => {
 		const scenario = diffScenario([
 			file('src/inline.lua', [
 				ctx('before', ['INSERT_MODE_SHARED_BEFORE']),
@@ -58,13 +58,26 @@ test.describe('comment editor workflow inline rendering', () => {
 			terminal,
 			"local s=require('unified_review.session.manager').active(); vim.api.nvim_set_current_win(s.ui.right_window); vim.api.nvim_win_set_cursor(s.ui.right_window, {2, 0}); vim.cmd('UnifiedReview comment')",
 		);
-		await expect(terminal.getByText('<C-s> save · Esc cancel', { strict: false })).toBeVisible();
+		await expect(terminal.getByText('<C-s> save · q cancel', { strict: false })).toBeVisible();
 
 		const body = 'INSERT_MODE_SAVE_BODY';
 		terminal.write(body);
 		await expect(terminal.getByText(body, { strict: false })).toBeVisible();
-		terminal.write('\u0013');
+		terminal.write('\u001b');
 
+		const normalModeRows = await waitForBuffer(
+			terminal,
+			(visibleRows) =>
+				visibleRows.some((row) => row.includes(body)) &&
+				visibleRows.some((row) => row.includes('Comment ·')) &&
+				!visibleRows.some((row) => row.includes('-- INSERT --')),
+		);
+		assert.ok(
+			normalModeRows.some((row) => row.includes('Comment ·')),
+			'expected Escape to leave the comment editor open',
+		);
+
+		terminal.write('\u0013');
 		const rows = await waitForBuffer(
 			terminal,
 			(visibleRows) =>
