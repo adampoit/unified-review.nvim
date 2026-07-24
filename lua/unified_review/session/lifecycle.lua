@@ -9,8 +9,14 @@ function M.close(session)
 	pcall(require("unified_review.ui.signs").clear, session)
 	pcall(require("unified_review.ui.thread_panel").close, session)
 	pcall(require("unified_review.ui.summary").close, session)
-	if session.ui_autocmd_group then
-		pcall(vim.api.nvim_del_augroup_by_id, session.ui_autocmd_group)
+	for _, field in ipairs({ "ui_autocmd_group", "_diff_render_ready_group", "_thread_jump_autocmd_group" }) do
+		local group = session[field]
+		if group then
+			pcall(vim.api.nvim_del_augroup_by_id, group)
+		end
+	end
+	if session._diff_render_ready_timer then
+		pcall(vim.fn.timer_stop, session._diff_render_ready_timer)
 	end
 	if session.ui and session.ui.codediff_tab then
 		pcall(require("codediff.ui.lifecycle").cleanup, session.ui.codediff_tab)

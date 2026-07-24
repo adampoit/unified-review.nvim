@@ -343,6 +343,173 @@ local function schedule_sync(session, delay)
 	end
 end
 
+local function clear_render_ready_group(session, group)
+	if group then
+		pcall(vim.api.nvim_del_augroup_by_id, group)
+	end
+	if session._diff_render_ready_group == group then
+		if session._diff_render_ready_timer then
+			pcall(vim.fn.timer_stop, session._diff_render_ready_timer)
+		end
+		session._diff_render_ready_group = nil
+		session._diff_render_ready_timer = nil
+	end
+end
+
+local function emit_render_ready(session, tabpage, generation, ready_token, path)
+	if session._diff_render_generation ~= generation then
+		return false
+	end
+	sync_from_codediff(session, tabpage, {})
+	debug.event("diff.render.ready", {
+		session = session.id,
+		tabpage = tabpage,
+		generation = generation,
+		path = path,
+	})
+	vim.api.nvim_exec_autocmds("User", {
+		pattern = "UnifiedReviewDiffReady",
+		modeline = false,
+		data = {
+			session_id = session.id,
+			tabpage = tabpage,
+			generation = generation,
+			token = ready_token,
+			path = path,
+		},
+	})
+	return true
+end
+
+local function update_is_ready(session, tabpage, expected_path)
+	local _, lifecycle = codediff_modules()
+	if not lifecycle then
+		return false
+	end
+	local codediff_session = lifecycle.get_session(tabpage)
+	if not codediff_session or codediff_session.stored_diff_result == nil then
+		return false
+	end
+	local original_path, modified_path = lifecycle.get_paths(tabpage)
+	local expected = normalize_path(session, expected_path)
+	if
+		expected
+		and normalize_path(session, original_path) ~= expected
+		and normalize_path(session, modified_path) ~= expected
+	then
+		return false
+	end
+	local left_buf, right_buf = lifecycle.get_buffers(tabpage)
+	local left_win, right_win = lifecycle.get_windows(tabpage)
+	return (left_win and vim.api.nvim_win_is_valid(left_win) and window_buffer(left_win) == left_buf)
+		or (right_win and vim.api.nvim_win_is_valid(right_win) and window_buffer(right_win) == right_buf)
+end
+
+local function watch_update_ready(session, tabpage, generation, ready_token, path)
+	if session._diff_render_ready_group then
+		clear_render_ready_group(session, session._diff_render_ready_group)
+	end
+	local group = vim.api.nvim_create_augroup(
+		"unified_review_diff_ready_" .. tostring(session.id or vim.loop.hrtime()),
+		{ clear = true }
+	)
+	session._diff_render_ready_group = group
+	local settled = false
+	local deadline = vim.loop.hrtime() + 5e9
+	local function complete()
+		if settled then
+			return
+		end
+		if session._diff_render_generation ~= generation then
+			settled = true
+			clear_render_ready_group(session, group)
+			return
+		end
+		if not update_is_ready(session, tabpage, path) then
+			if vim.loop.hrtime() >= deadline then
+				settled = true
+				clear_render_ready_group(session, group)
+				debug.event("diff.render.ready_timeout", {
+					session = session.id,
+					tabpage = tabpage,
+					generation = generation,
+					path = path,
+				})
+			end
+			return
+		end
+		settled = true
+		clear_render_ready_group(session, group)
+		emit_render_ready(session, tabpage, generation, ready_token, path)
+	end
+	vim.api.nvim_create_autocmd("User", {
+		group = group,
+		pattern = "CodeDiffVirtualFileLoaded",
+		callback = function()
+			vim.schedule(complete)
+		end,
+	})
+	-- Explorer selection may resolve revisions before it calls update(), and
+	-- cached virtual buffers do not emit a load event. Poll the lifecycle state
+	-- as the completion fallback for those CodeDiff paths.
+	session._diff_render_ready_timer = vim.fn.timer_start(25, function()
+		vim.schedule(complete)
+	end, { ["repeat"] = -1 })
+	vim.schedule(complete)
+end
+
+local function codediff_explorer_file(session, file)
+	local _, lifecycle = codediff_modules()
+	local codediff_session = lifecycle and lifecycle.get_session(session.ui.codediff_tab)
+	local explorer = codediff_session and codediff_session.explorer
+	if not explorer or type(explorer.on_file_select) ~= "function" then
+		return nil, nil
+	end
+
+	for _, group in ipairs({ "conflicts", "unstaged", "staged" }) do
+		for _, candidate in ipairs((explorer.status_result or {})[group] or {}) do
+			if
+				normalize_path(session, candidate.path) == normalize_path(session, file.path)
+				or normalize_path(session, candidate.old_path) == normalize_path(session, file.path)
+			then
+				local file_data = vim.deepcopy(candidate)
+				file_data.group = group
+				return explorer, file_data
+			end
+		end
+	end
+
+	return explorer,
+		{
+			path = file.path,
+			old_path = file.old_path,
+			status = status_char(file.status),
+			group = "unstaged",
+		}
+end
+
+local function select_codediff_explorer_file(session, file, auto_scroll)
+	local explorer, file_data = codediff_explorer_file(session, file)
+	if not explorer or not file_data then
+		return false
+	end
+	local ok, err = pcall(explorer.on_file_select, file_data, { no_jump = not auto_scroll })
+	if not ok then
+		debug.event("diff.render.explorer_select_error", {
+			session = session.id,
+			file = file.path,
+			error = err,
+		})
+		return false
+	end
+	debug.event("diff.render.explorer_select", {
+		session = session.id,
+		file = file.path,
+		group = file_data.group,
+	})
+	return true
+end
+
 local function attach_file_select_autocmd(session)
 	local group = vim.api.nvim_create_augroup(
 		"unified_review_codediff_" .. tostring(session.id or vim.loop.hrtime()),
@@ -454,14 +621,17 @@ function M.render(session, opts)
 			vim.log.levels.ERROR,
 			{ title = "unified-review" }
 		)
-		return
+		return false
 	end
+
+	session._diff_render_generation = (session._diff_render_generation or 0) + 1
+	local generation = session._diff_render_generation
 
 	if session.ui and session.ui.codediff_tab then
 		local file = selection.current_file(session)
 		local target = session.target or {}
 		if not file then
-			return
+			return false
 		end
 		local mod_revision = modified_revision(target)
 		local cfg = {
@@ -479,20 +649,28 @@ function M.render(session, opts)
 			file = file.path,
 			auto_scroll_to_first_hunk = auto_scroll,
 		})
-		view.update(session.ui.codediff_tab, cfg, auto_scroll)
-		schedule_sync(session, 150)
-		return
+		local updated = select_codediff_explorer_file(session, file, auto_scroll)
+		if not updated then
+			updated = view.update(session.ui.codediff_tab, cfg, auto_scroll)
+		end
+		if not updated then
+			return false
+		end
+		watch_update_ready(session, session.ui.codediff_tab, generation, opts.ready_token, file.path)
+		return true
 	end
 
 	local first_file = selection.current_file(session)
 	local result
 	result = view.create(session_config(session), first_file and detect_filetype(first_file.path) or "", function()
-		sync_from_codediff(session, vim.api.nvim_get_current_tabpage(), result or {})
+		local tabpage = vim.api.nvim_get_current_tabpage()
+		emit_render_ready(session, tabpage, generation, opts.ready_token, first_file and first_file.path)
 	end)
 	if result then
 		sync_from_codediff(session, vim.api.nvim_get_current_tabpage(), result)
 		attach_file_select_autocmd(session)
 	end
+	return true
 end
 
 return M

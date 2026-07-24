@@ -205,6 +205,7 @@ test('thread panel jump to another file is not overridden by CodeDiff first-hunk
 			'}}',
 			"session._thread_selected_id = 'thread-e2e-jump'",
 			"session._thread_selected_key = 'thread:thread-e2e-jump'",
+			"vim.api.nvim_create_autocmd('User', { pattern = 'UnifiedReviewDiffReady', once = true, callback = function() vim.notify('E2E_THREAD_JUMP_READY') end })",
 			"vim.schedule(function() require('unified_review.ui.thread_panel').open(session) end)",
 		].join('\n'),
 	);
@@ -217,7 +218,8 @@ test('thread panel jump to another file is not overridden by CodeDiff first-hunk
 	terminal.write('\r');
 	await expect(terminal.getByText('B_CHANGED_TARGET_LINE', { strict: false })).toBeVisible();
 	await expect(terminal.getByText('Review Overview', { strict: false })).not.toBeVisible();
-	await delay(5000);
+	await expect(terminal.getByText('E2E_THREAD_JUMP_READY')).toBeVisible();
+	await delay(1200);
 
 	runLua(
 		terminal,
