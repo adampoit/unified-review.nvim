@@ -60,7 +60,6 @@ local function review_comment()
 		)
 		return
 	end
-	session._comment_editor_open = true
 	comment_editor.open({ target = current_target })
 end
 

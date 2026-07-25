@@ -10,12 +10,103 @@ import {
 import {
   createInlineCommentThroughEditor,
   openReviewForRepo,
+  runLua,
   waitForBuffer,
 } from "./helpers.js";
 
 configureNvimTest(test, { columns: 180, rows: 40 });
 
 test.describe("comment editor workflow inline rendering", () => {
+  test("comment editor is anchored below its target with an opposite-side spacer", async ({
+    terminal,
+  }) => {
+    const scenario = diffScenario([
+      file("src/inline.lua", [
+        ctx("before", ["INLINE_EDITOR_SHARED_BEFORE"]),
+        add("target", ["INLINE_EDITOR_TARGET", "INLINE_EDITOR_AFTER"]),
+        ctx("shared_after", ["INLINE_EDITOR_SHARED_AFTER"]),
+      ]),
+    ]);
+    const repo = createRepoFromDiffScenario(scenario);
+    await openReviewForRepo(terminal, repo);
+    await expect(
+      terminal.getByText("INLINE_EDITOR_TARGET", { strict: false }),
+    ).toBeVisible();
+
+    runLua(
+      terminal,
+      "local s=require('unified_review.session.manager').active(); vim.api.nvim_set_current_win(s.ui.right_window); vim.api.nvim_win_set_cursor(s.ui.right_window, {2, 0}); vim.cmd('UnifiedReview comment')",
+    );
+    await expect(
+      terminal.getByText("<C-s> save · Esc cancel", { strict: false }),
+    ).toBeVisible();
+
+    const rows = await waitForBuffer(
+      terminal,
+      (visibleRows) =>
+        visibleRows.some((row) => row.includes("INLINE_EDITOR_TARGET")) &&
+        visibleRows.some(
+          (row) => row.includes("Comment ·") && row.includes("╱"),
+        ),
+    );
+    captureTerminal(terminal, "inline comment editor - anchored to diff");
+
+    const targetRow = rows.findIndex((row) =>
+      row.includes("INLINE_EDITOR_TARGET"),
+    );
+    const editorRow = rows.findIndex((row) => row.includes("Comment ·"));
+    assert.ok(editorRow > targetRow, "expected the editor below its target");
+    assert.ok(
+      rows[editorRow].includes("╱"),
+      "expected an aligned spacer opposite the editor",
+    );
+
+    terminal.write("\u001b");
+  });
+
+  test("saving from insert mode returns focus to the diff in normal mode", async ({
+    terminal,
+  }) => {
+    const scenario = diffScenario([
+      file("src/inline.lua", [
+        ctx("before", ["INSERT_MODE_SHARED_BEFORE"]),
+        add("target", ["INSERT_MODE_TARGET", "INSERT_MODE_AFTER"]),
+        ctx("shared_after", ["INSERT_MODE_SHARED_AFTER"]),
+      ]),
+    ]);
+    const repo = createRepoFromDiffScenario(scenario);
+    await openReviewForRepo(terminal, repo);
+    await expect(
+      terminal.getByText("INSERT_MODE_TARGET", { strict: false }),
+    ).toBeVisible();
+
+    runLua(
+      terminal,
+      "local s=require('unified_review.session.manager').active(); vim.api.nvim_set_current_win(s.ui.right_window); vim.api.nvim_win_set_cursor(s.ui.right_window, {2, 0}); vim.cmd('UnifiedReview comment')",
+    );
+    await expect(
+      terminal.getByText("<C-s> save · Esc cancel", { strict: false }),
+    ).toBeVisible();
+
+    const body = "INSERT_MODE_SAVE_BODY";
+    terminal.write(body);
+    await expect(terminal.getByText(body, { strict: false })).toBeVisible();
+    terminal.write("\u0013");
+
+    const rows = await waitForBuffer(
+      terminal,
+      (visibleRows) =>
+        visibleRows.some((row) => row.includes(body)) &&
+        visibleRows.some((row) => row.includes("right L2")) &&
+        !visibleRows.some((row) => row.includes("-- INSERT --")) &&
+        !visibleRows.some((row) => row.includes("Comment ·")),
+    );
+    assert.ok(
+      rows.some((row) => row.includes("INSERT_MODE_AFTER")),
+      "expected focus to return to the diff after saving",
+    );
+  });
+
   test("right-side comments created through :UnifiedReview comment render inline with left spacers", async ({
     terminal,
   }) => {

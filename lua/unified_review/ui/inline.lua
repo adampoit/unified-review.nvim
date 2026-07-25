@@ -21,6 +21,7 @@ local HIGHLIGHTS = {
 	UnifiedReviewInlineResolved = "DiagnosticOk",
 	UnifiedReviewInlineDraft = "String",
 	UnifiedReviewInlineStale = "WarningMsg",
+	UnifiedReviewInlineComposer = "NormalFloat",
 }
 
 local STATE_ICONS = {
@@ -339,6 +340,15 @@ local function filler_lines(count)
 	return lines
 end
 
+local function composer_lines(count, width)
+	local lines = {}
+	local background = fill_text(" ", width)
+	for _ = 1, count do
+		table.insert(lines, as_virt_line(background, "UnifiedReviewInlineComposer"))
+	end
+	return lines
+end
+
 local function has_comment_text(lines)
 	for _, line in ipairs(lines or {}) do
 		for _, chunk in ipairs(line) do
@@ -372,16 +382,19 @@ local function opposite_side(side)
 	return side == "left" and "right" or "left"
 end
 
-local function add_placement(placements, anchor, side, thread)
+local function placement_item(placements, anchor)
 	local item = placements.by_key[anchor.key]
 	if not item then
 		item = { sides = {} }
 		placements.by_key[anchor.key] = item
 		table.insert(placements.items, item)
 	end
+	return item
+end
+
+local function ensure_placement_sides(item, anchor, side)
 	local above = anchor.above_by_side or { left = anchor.above, right = anchor.above }
 	item.sides[side] = item.sides[side] or { row = anchor.rows[side], above = above[side], threads = {} }
-	table.insert(item.sides[side].threads, thread)
 	local other = opposite_side(side)
 	if anchor.filler and anchor.filler.side == other then
 		item.sides[other] = item.sides[other]
@@ -396,6 +409,19 @@ local function add_placement(placements, anchor, side, thread)
 	else
 		item.sides[other] = item.sides[other] or { row = anchor.rows[other], above = above[other], threads = {} }
 	end
+	return item.sides[side]
+end
+
+local function add_placement(placements, anchor, side, thread)
+	local item = placement_item(placements, anchor)
+	local side_placement = ensure_placement_sides(item, anchor, side)
+	table.insert(side_placement.threads, thread)
+end
+
+local function add_editor_placement(placements, anchor, side, editor)
+	local item = placement_item(placements, anchor)
+	local side_placement = ensure_placement_sides(item, anchor, side)
+	side_placement.editor = editor
 end
 
 local function buffer_for_side(session, side)
@@ -855,6 +881,23 @@ function M.place(session)
 		end
 	end
 
+	local editor = session._inline_editor
+	if editor then
+		editor.geometry = nil
+		local target = editor.target or {}
+		if current_file_matches(session, target) then
+			local side = target.side or target.start_side or "right"
+			local buf = buffer_for_side(session, side)
+			if buf and vim.api.nvim_buf_is_valid(buf) then
+				local line = anchor_line_for_target(target)
+				local line_count = vim.api.nvim_buf_line_count(buf)
+				if target.kind == "file" or (line > 0 and line <= line_count) then
+					add_editor_placement(placements, anchor_for_target(session, target), side, editor)
+				end
+			end
+		end
+	end
+
 	local filler_patches = {}
 	for _, item in ipairs(sorted_placements(placements)) do
 		align_filler_placements_to_visual_rows(session, item)
@@ -862,10 +905,17 @@ function M.place(session)
 		local height = 0
 		for _, side in ipairs({ "left", "right" }) do
 			local side_placement = item.sides[side]
-			if side_placement and #side_placement.threads > 0 then
+			if side_placement and (#side_placement.threads > 0 or side_placement.editor) then
 				local buf = buffer_for_side(session, side)
 				local block_width = buf and vim.api.nvim_buf_is_valid(buf) and block_width_for(session, buf) or 80
 				rendered[side] = render_threads(side_placement.threads, block_width)
+				if side_placement.editor then
+					side_placement.editor_offset = #rendered[side]
+					vim.list_extend(
+						rendered[side],
+						composer_lines(side_placement.editor.total_height or 7, block_width)
+					)
+				end
 				height = math.max(height, #rendered[side])
 			end
 		end
@@ -880,12 +930,15 @@ function M.place(session)
 						vim.list_extend(lines, filler_lines(height - #lines))
 					end
 
+					local insertion_offset = side_placement.offset or 0
+					local geometry_row = mark_row
 					if has_filler_mark(buf, mark_row) then
-						add_virtual_line_patch(filler_patches, buf, mark_row, side_placement.offset or 0, lines)
+						add_virtual_line_patch(filler_patches, buf, mark_row, insertion_offset, lines)
 					else
 						local spacer_row = side_placement.mode == "filler"
 								and valid_row_for_buffer(buf, side_placement.fallback_row)
 							or mark_row
+						geometry_row = spacer_row
 						if spacer_row then
 							vim.api.nvim_buf_set_extmark(buf, inline_ns, spacer_row, 0, {
 								virt_lines = lines,
@@ -895,6 +948,15 @@ function M.place(session)
 								priority = 10,
 							})
 						end
+					end
+					if side_placement.editor and geometry_row then
+						side_placement.editor.geometry = {
+							buffer = buf,
+							row = geometry_row,
+							row_offset = insertion_offset + (side_placement.editor_offset or 0),
+							width = block_width_for(session, buf),
+							above = side_placement.above == true,
+						}
 					end
 				end
 			end

@@ -5,6 +5,7 @@ function M.close(session)
 		return
 	end
 	session.closed = true
+	pcall(require("unified_review.ui.comment_editor").close, session)
 	pcall(require("unified_review.ui.signs").clear, session)
 	pcall(require("unified_review.ui.thread_panel").close, session)
 	pcall(require("unified_review.ui.summary").close, session)

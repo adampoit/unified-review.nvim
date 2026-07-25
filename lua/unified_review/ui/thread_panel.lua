@@ -12,6 +12,7 @@ local M = {}
 
 M.ns = vim.api.nvim_create_namespace("unified_review_thread_panel")
 M.compose_ns = vim.api.nvim_create_namespace("unified_review_thread_panel_composer")
+M.action_ns = vim.api.nvim_create_namespace("unified_review_thread_panel_actions")
 
 local HIGHLIGHT_LINKS = {
 	UnifiedReviewThreadsTitle = "UnifiedReviewFloatTitle",
@@ -35,6 +36,7 @@ local HIGHLIGHT_LINKS = {
 
 local STATE_ICONS = threads.STATE_ICONS
 local FILTER_STATES = threads.FILTER_STATES
+local DISPLAY_STATES = { "open", "draft", "resolved", "stale" }
 
 local function clamp(value, min_value, max_value)
 	return math.max(min_value, math.min(max_value, value))
@@ -45,19 +47,46 @@ local function ensure_highlights()
 end
 
 local HORIZONTAL_PADDING = "  "
-local OVERVIEW_KEY_ITEMS = {
-	{ label = "j/k", text = "select" },
-	{ label = "o/v/d/s/a", text = "states" },
-	{ label = "/", text = "filter" },
-	{ label = "S", text = "scope" },
-	{ label = "CR", text = "jump" },
-	{ label = "Space/za", text = "collapse" },
-	{ label = "R", text = "reply inline" },
-	{ label = "e", text = "export" },
-	{ label = "P", text = "publish drafts" },
-	{ label = "D", text = "delete" },
-	{ label = "Esc", text = "cancel reply" },
-	{ label = "q", text = "close" },
+local WIDE_LAYOUT_MIN_WIDTH = 96
+
+local HELP_SECTIONS = {
+	{
+		title = "Navigate",
+		items = {
+			{ label = "j/k", text = "select thread" },
+			{ label = "C-e/C-y", text = "scroll workspace" },
+			{ label = "Enter", text = "open details or jump to code" },
+			{ label = "Space/za", text = "collapse file" },
+			{ label = "S", text = "toggle project/current-file scope" },
+		},
+	},
+	{
+		title = "Filter",
+		items = {
+			{ label = "/", text = "search threads" },
+			{ label = "o/v/d/s", text = "toggle open/resolved/draft/stale" },
+			{ label = "a", text = "toggle every state" },
+			{ label = "c", text = "clear filters" },
+		},
+	},
+	{
+		title = "Act on selected thread",
+		items = {
+			{ label = "R", text = "reply" },
+			{ label = "r", text = "resolve or reopen" },
+			{ label = "e", text = "toggle export" },
+			{ label = "P", text = "publish local drafts" },
+			{ label = "D", text = "delete draft" },
+		},
+	},
+	{
+		title = "Panel",
+		items = {
+			{ label = "?", text = "toggle this help" },
+			{ label = "Esc", text = "return to threads" },
+			{ label = "q", text = "close" },
+		},
+	},
 }
 
 local function style_lines(lines)
@@ -171,57 +200,53 @@ local function collapsed_files_for(session)
 	return session._thread_file_collapsed
 end
 
-local function status_line(session, visible_count)
-	local summary = threads.summary(session)
-	local draft_label = plural(summary.draft, "draft")
-	if summary.local_draft and summary.remote_draft and (summary.local_draft > 0 or summary.remote_draft > 0) then
-		draft_label =
-			string.format("%s (%d local, %d remote)", draft_label, summary.local_draft or 0, summary.remote_draft or 0)
-	end
-	return string.format(
-		"Status: %s · %s · %s · %s · %s · %s",
-		plural(summary.threads, "thread"),
-		plural(summary.open, "open"),
-		draft_label,
-		plural(summary.resolved, "resolved"),
-		plural(summary.stale, "stale"),
-		plural(visible_count, "visible")
-	)
-end
-
 local function states_label(session)
 	local filter = filter_for(session)
 	local enabled = {}
 	for _, state_name in ipairs(FILTER_STATES) do
 		if filter[state_name] then
-			table.insert(enabled, string.format("%s %s", STATE_ICONS[state_name], state_name))
+			table.insert(enabled, state_name)
 		end
 	end
-	return #enabled > 0 and table.concat(enabled, ", ") or "none"
+	if #enabled == #FILTER_STATES then
+		return "all states"
+	end
+	return #enabled > 0 and table.concat(enabled, ", ") or "no states"
+end
+
+local function summary_line(session)
+	local summary = threads.summary(session)
+	local parts = {}
+	for _, state_name in ipairs(DISPLAY_STATES) do
+		local count = summary[state_name] or 0
+		if count > 0 then
+			local label = state_name == "draft" and (count == 1 and "draft" or "drafts") or state_name
+			table.insert(parts, string.format("%d %s", count, label))
+		end
+	end
+	table.insert(parts, plural(summary.threads or 0, "thread") .. " total")
+	return table.concat(parts, " · ")
 end
 
 local function filter_summary_line(session)
 	local visible = threads.filtered_threads(session)
 	local scope = threads.scope_for(session)
 	local query = session._thread_query and vim.trim(session._thread_query) or ""
-	return string.format(
-		"Threads: %d/%d    Scope: %s    States: %s    Query: %s",
-		#visible,
-		#(session.threads or {}),
-		scope == "current" and "current file" or "project",
+	local parts = {
+		scope == "current" and "Current file" or "Project",
 		states_label(session),
-		query ~= "" and query or "none"
-	)
+		query ~= "" and ("query: " .. query) or "no query",
+	}
+	if #visible ~= #(session.threads or {}) then
+		table.insert(parts, string.format("%d/%d visible", #visible, #(session.threads or {})))
+	end
+	return table.concat(parts, " · ")
 end
 
 local content_width_for
 
 function M.render_filter_lines(session)
-	local lines = { filter_summary_line(session) }
-	for _, line in ipairs(key_hint_lines(OVERVIEW_KEY_ITEMS, content_width_for(session))) do
-		table.insert(lines, renderer.flatten_line(line).text)
-	end
-	return lines
+	return { summary_line(session), filter_summary_line(session) }
 end
 
 local function file_counts(group)
@@ -231,45 +256,13 @@ local function file_counts(group)
 		counts[st] = (counts[st] or 0) + 1
 	end
 	local parts = {}
-	for _, st in ipairs(FILTER_STATES) do
+	for _, st in ipairs(DISPLAY_STATES) do
 		if counts[st] and counts[st] > 0 then
-			table.insert(parts, string.format("%d %s", counts[st], st))
+			local label = st == "draft" and (counts[st] == 1 and "draft" or "drafts") or st
+			table.insert(parts, string.format("%d %s", counts[st], label))
 		end
 	end
 	return #parts > 0 and table.concat(parts, " · ") or "no visible threads"
-end
-
-local function attention_lines(session)
-	local summary = threads.summary(session)
-	local lines = {}
-	if summary.draft > 0 or summary.stale > 0 or summary.open > 0 then
-		table.insert(lines, warning_line("Needs attention"))
-		if summary.draft > 0 then
-			table.insert(lines, warning_line(string.format("  %s", plural(summary.draft, "draft thread"))))
-			if (summary.local_draft or 0) > 0 then
-				table.insert(
-					lines,
-					warning_line(string.format("  %s", plural(summary.local_draft, "local draft thread")))
-				)
-			end
-			if (summary.remote_draft or 0) > 0 then
-				table.insert(
-					lines,
-					warning_line(string.format("  %s", plural(summary.remote_draft, "remote draft thread")))
-				)
-			end
-			if session.kind == "github_pr" and (summary.local_draft or 0) > 0 then
-				table.insert(lines, warning_line("  Press P to publish exported drafts to a GitHub pending review"))
-			end
-		end
-		if summary.stale > 0 then
-			table.insert(lines, warning_line(string.format("  %s", plural(summary.stale, "stale/outdated thread"))))
-		end
-		if summary.open > 0 then
-			table.insert(lines, warning_line(string.format("  %s", plural(summary.open, "unresolved open thread"))))
-		end
-	end
-	return lines
 end
 
 content_width_for = function(session)
@@ -289,52 +282,53 @@ local function list_preview_width(content_width)
 	return clamp(math.floor(content_width * 0.42), 44, math.max(44, math.min(76, content_width - 48)))
 end
 
-local function display_width(value)
-	return vim.fn.strdisplaywidth(value or "")
-end
-
-local function fill_text(fill, width)
-	fill = tostring(fill or " ")
-	if fill == "" or width <= 0 then
-		return ""
+local function wrap_long_word(word, width)
+	local lines = {}
+	local current = ""
+	for index = 0, vim.fn.strchars(word) - 1 do
+		local char = vim.fn.strcharpart(word, index, 1)
+		if current ~= "" and vim.fn.strdisplaywidth(current .. char) > width then
+			table.insert(lines, current)
+			current = char
+		else
+			current = current .. char
+		end
 	end
-	local text = ""
-	while display_width(text) < width do
-		text = text .. fill
+	if current ~= "" then
+		table.insert(lines, current)
 	end
-	return vim.fn.strcharpart(text, 0, width)
-end
-
-local function pane_border(title, width, top)
-	local left = top and "┌" or "└"
-	local right = top and "┐" or "┘"
-	local label = top and title and title ~= "" and (" " .. title .. " ") or ""
-	local remaining = math.max(0, width - display_width(left) - display_width(right) - display_width(label))
-	return ui.line({
-		ui.text(left, "UnifiedReviewThreadsBorder"),
-		ui.text(label, "UnifiedReviewThreadsTitle"),
-		ui.text(fill_text("─", remaining), "UnifiedReviewThreadsBorder"),
-		ui.text(right, "UnifiedReviewThreadsBorder"),
-	})
-end
-
-local function pane_line(child, width)
-	local inner_width = math.max(1, width - 4)
-	return ui.line({
-		ui.text("│ ", "UnifiedReviewThreadsBorder"),
-		ui.pad_right(ui.truncate(child or "", inner_width), inner_width),
-		ui.text(" │", "UnifiedReviewThreadsBorder"),
-	})
-end
-
-local function boxed_pane(title, content, width, height)
-	local lines = { pane_border(title, width, true) }
-	local body_height = math.max(1, (height or #(content or {})) - 2)
-	for index = 1, body_height do
-		table.insert(lines, pane_line((content or {})[index] or "", width))
-	end
-	table.insert(lines, pane_border(nil, width, false))
 	return lines
+end
+
+local function wrap_text(value, width)
+	value = tostring(value or "")
+	width = math.max(1, width)
+	if value == "" then
+		return { "" }
+	end
+	local lines = {}
+	local current = ""
+	for word in value:gmatch("%S+") do
+		if vim.fn.strdisplaywidth(word) > width then
+			if current ~= "" then
+				table.insert(lines, current)
+				current = ""
+			end
+			vim.list_extend(lines, wrap_long_word(word, width))
+		else
+			local candidate = current == "" and word or (current .. " " .. word)
+			if vim.fn.strdisplaywidth(candidate) <= width then
+				current = candidate
+			else
+				table.insert(lines, current)
+				current = word
+			end
+		end
+	end
+	if current ~= "" then
+		table.insert(lines, current)
+	end
+	return #lines > 0 and lines or { "" }
 end
 
 local function item_key(item)
@@ -449,8 +443,8 @@ end
 
 local function build_thread_list(session, visible, selected, content_width)
 	local nodes = build_thread_nodes(session, visible)
-	local body_width = math.max(24, (content_width or 78) - 34)
-	local height = session._thread_panel_pane_height and math.max(1, session._thread_panel_pane_height - 2) or nil
+	local body_width = math.max(12, (content_width or 78) - 32)
+	local height = session._thread_panel_pane_height and math.max(1, session._thread_panel_pane_height) or nil
 	local list = tree.list(nodes, {
 		selectable = true,
 		height = height,
@@ -480,7 +474,7 @@ local function build_thread_list(session, visible, selected, content_width)
 				return ui.line({
 					ui.text(item.collapsed and "▸" or "▾", "UnifiedReviewThreadsFile"),
 					ui.text(" " .. item.path .. "  ", "UnifiedReviewThreadsFile"),
-					ui.text(plural(item.thread_count, "thread") .. "  ·  " .. item.counts, "UnifiedReviewThreadsFile"),
+					ui.text(plural(item.thread_count, "thread") .. " · " .. item.counts, "UnifiedReviewThreadsMuted"),
 				}, { hl = "UnifiedReviewThreadsFile" })
 			end
 			local thread = item.thread or {}
@@ -489,174 +483,194 @@ local function build_thread_list(session, visible, selected, content_width)
 			local state_hl = state_highlight_name(st)
 			local icon = STATE_ICONS[st] or "●"
 			local state_label = thread_state_label(thread)
-			local state_width = st == "draft" and 12 or 9
-			local export_icon = threads.export_icon(thread)
 			local first = thread.comments and thread.comments[1]
-			local author = first and (first.author or "local") or ""
-			local body = truncate(preview_text(first), body_width)
+			local author = first and (first.author or "local") or "local"
 			local comment_count = #(thread.comments or {})
-			local suffix = comment_count > 1 and string.format("  +%d replies", comment_count - 1) or ""
+			local reply_count = math.max(0, comment_count - 1)
+			local suffix = reply_count > 0
+					and string.format(" · %d %s", reply_count, reply_count == 1 and "reply" or "replies")
+				or ""
+			local export_label = threads.export_icon(thread) ~= " " and " ⇪" or ""
+			local body = truncate(preview_text(first), body_width)
 			return ui.line({
-				ui.text(icon, state_hl),
-				ui.text(" "),
-				ui.text(export_icon, "UnifiedReviewThreadsBadge"),
-				ui.text(" "),
-				ui.text(string.format("%-" .. state_width .. "s", state_label), state_hl),
-				ui.text(string.format(" %-8s %-12s %s%s", target_label(th_target), author, body, suffix)),
+				ui.text(icon .. " " .. state_label, state_hl),
+				ui.text(export_label, "UnifiedReviewThreadsBadge"),
+				ui.text(string.format("  %s · %s  %s%s", target_label(th_target), author, body, suffix)),
 			})
 		end,
 	})
 	return list.document, list.rows
 end
 
-local function detail_document(item, width, opts)
-	opts = opts or {}
+local function append_detail_composer(lines, session, thread, meta, width)
+	local composer = session._thread_composer
+	if not composer then
+		return
+	end
+	if not thread or thread.id ~= composer.thread_id then
+		session._thread_composer = nil
+		return
+	end
+	composer.body_height = math.max(4, math.min(8, composer.body_height or #(composer.lines or {})))
+	table.insert(lines, "")
+	table.insert(lines, section_line("Reply"))
+	table.insert(lines, divider_line(math.max(12, width or 40)))
+	meta.composer = { start_row = #lines + 1 }
+	for _ = 1, composer.body_height do
+		table.insert(lines, " ")
+	end
+	meta.composer.footer_row = #lines + 1
+	table.insert(lines, divider_line(math.max(12, width or 40)))
+end
+
+local function detail_document(item, width, session, meta)
+	meta = meta or {}
 	if item and item.kind == "file" then
-		local lines = opts.title == false and {} or { section_line("Selected file") }
-		table.insert(lines, label_value_line("File:", item.path))
-		table.insert(lines, label_value_line("Threads:", plural(item.thread_count, "thread") .. " · " .. item.counts))
-		table.insert(lines, label_value_line("State:", item.collapsed and "collapsed" or "expanded"))
-		table.insert(lines, "")
-		table.insert(lines, context_line("Press Space/za or Enter to collapse/expand."))
-		return lines
+		return {
+			label_value_line("File:", item.path),
+			label_value_line("Threads:", plural(item.thread_count, "thread") .. " · " .. item.counts),
+			label_value_line("State:", item.collapsed and "collapsed" or "expanded"),
+			"",
+			context_line("Press Enter or Space to collapse or expand this file."),
+		}
 	end
 
 	local thread = item and item.thread or item
-	local lines = opts.title == false and {} or { section_line("Selected thread") }
 	if not thread then
-		table.insert(lines, warning_line("No thread selected"))
-		return lines
+		return { warning_line("No thread selected") }
 	end
-	local max_width = math.max(24, (width or 78) - 2)
-	for _, line in ipairs(M.render_thread_document(thread)) do
-		if type(line) == "string" then
-			table.insert(lines, truncate(line, max_width))
-		else
+	local lines = M.render_thread_document(thread, width)
+	append_detail_composer(lines, session, thread, meta, width)
+	return lines
+end
+
+local function help_document(content_width)
+	local lines = {
+		section_line("Keyboard shortcuts"),
+		context_line("Actions stay available without keeping every key on screen."),
+	}
+	for _, section in ipairs(HELP_SECTIONS) do
+		table.insert(lines, "")
+		table.insert(lines, section_line(section.title))
+		for _, line in ipairs(key_hint_lines(section.items, content_width)) do
 			table.insert(lines, line)
 		end
 	end
 	return lines
 end
 
-local function append_composer(lines, session, selected, meta, content_width)
-	local composer = session._thread_composer
-	if not composer then
-		return
-	end
-	if not selected or selected.id ~= composer.thread_id then
-		session._thread_composer = nil
-		return
-	end
-	local body = composer.lines or { "" }
-	if #body == 0 then
-		body = { "" }
-	end
-	table.insert(lines, "")
-	table.insert(lines, divider_line(content_width or 78))
-	table.insert(lines, section_line("Reply"))
-	table.insert(lines, context_line("Edit below in this panel. <C-s> saves, Esc cancels, q closes the panel."))
-	meta.composer = { start_row = #lines + 1 }
-	for _, line in ipairs(body) do
-		table.insert(lines, line)
-	end
-	meta.composer.footer_row = #lines + 1
-	table.insert(lines, context_line("[<C-s>] save reply · [Esc] cancel reply"))
-end
-
-local function append_thread_workspace(lines, row_map, session, visible, selected, content_width)
-	local list_lines, local_row_map = build_thread_list(session, visible, selected, content_width)
-	local use_columns = content_width >= 96
-	local detail_lines = detail_document(selected, content_width, { title = not use_columns })
-	local base = #lines
+local function append_thread_workspace(lines, row_map, session, visible, selected, content_width, meta)
+	local use_columns = content_width >= WIDE_LAYOUT_MIN_WIDTH
+	local view = session._thread_panel_view or "list"
 	if use_columns then
-		local list_width = list_preview_width(content_width)
-		local detail_width = math.max(42, content_width - list_width - 2)
-		local pane_height = session._thread_panel_pane_height or math.max(#list_lines, #detail_lines) + 2
-		local list_box = boxed_pane("Threads", list_lines, list_width, pane_height)
-		local detail_box = boxed_pane("Details", detail_lines, detail_width, pane_height)
-		local count = math.max(#list_box, #detail_box)
-		for index = 1, count do
-			table.insert(
-				lines,
-				ui.columns({
-					{ child = list_box[index] or "", width = list_width, truncate = false },
-					{ child = detail_box[index] or "", width = detail_width, truncate = false },
-				}, { separator = "  " })
-			)
-			local content_index = index - 1
-			if local_row_map[content_index] then
-				row_map[base + index] = local_row_map[content_index]
+		view = "list"
+	elseif view == "detail" and (not selected or selected.kind ~= "thread") then
+		view = "list"
+		session._thread_panel_view = "list"
+	end
+
+	local base = #lines
+	if not use_columns and view == "detail" then
+		table.insert(lines, section_line("Thread details"))
+		local detail_meta = {}
+		local detail_lines = detail_document(selected, content_width, session, detail_meta)
+		vim.list_extend(lines, detail_lines)
+		if detail_meta.composer then
+			meta.composer = {
+				start_row = base + 1 + detail_meta.composer.start_row,
+				footer_row = base + 1 + detail_meta.composer.footer_row,
+				start_col = vim.fn.strdisplaywidth(HORIZONTAL_PADDING),
+				width = content_width,
+			}
+		end
+		return
+	end
+
+	if not use_columns then
+		table.insert(lines, section_line("Threads"))
+		local list_lines, local_row_map = build_thread_list(session, visible, selected, content_width)
+		for index, line in ipairs(list_lines) do
+			table.insert(lines, line)
+			if local_row_map[index] then
+				row_map[#lines] = local_row_map[index]
 			end
 		end
 		return
 	end
-	for index, line in ipairs(list_lines) do
-		table.insert(lines, line)
+
+	local list_width = list_preview_width(content_width)
+	local separator = " │ "
+	local detail_width = math.max(36, content_width - list_width - vim.fn.strdisplaywidth(separator))
+	local list_lines, local_row_map = build_thread_list(session, visible, selected, list_width)
+	local detail_meta = {}
+	local detail_lines = detail_document(selected, detail_width, session, detail_meta)
+	table.insert(
+		lines,
+		ui.columns({
+			{ child = section_line("Threads"), width = list_width, truncate = false },
+			{ child = section_line("Details"), width = detail_width, truncate = false },
+		}, { separator = separator })
+	)
+	local count = math.max(#list_lines, #detail_lines)
+	for index = 1, count do
+		table.insert(
+			lines,
+			ui.columns({
+				{ child = list_lines[index] or "", width = list_width, truncate = true },
+				{ child = detail_lines[index] or "", width = detail_width, truncate = true },
+			}, { separator = separator })
+		)
 		if local_row_map[index] then
 			row_map[#lines] = local_row_map[index]
 		end
 	end
-	table.insert(lines, "")
-	table.insert(lines, divider_line(content_width or 78))
-	vim.list_extend(lines, detail_lines)
+	if detail_meta.composer then
+		meta.composer = {
+			start_row = base + 1 + detail_meta.composer.start_row,
+			footer_row = base + 1 + detail_meta.composer.footer_row,
+			start_col = vim.fn.strdisplaywidth(HORIZONTAL_PADDING) + list_width + vim.fn.strdisplaywidth(separator),
+			width = detail_width,
+		}
+	end
 end
 
 local function build_lines(session)
 	local visible = threads.filtered_threads(session)
 	local selected = selected_list_item(session, visible)
-	local selected_thread_item = selected and selected.kind == "thread" and selected.thread or nil
 	local summary = threads.summary(session)
 	local content_width = content_width_for(session)
-	local divider_width = math.min(100, content_width)
-	local lines = key_hint_lines(OVERVIEW_KEY_ITEMS, content_width)
-	table.insert(lines, "")
-	vim.list_extend(lines, {
+	local lines = {
+		section_line(summary_line(session)),
 		context_line(filter_summary_line(session)),
-		context_line(status_line(session, #visible)),
-		context_line(
-			string.format(
-				"Files: %s · %s",
-				plural(summary.files, "changed file"),
-				plural(summary.files_with_threads, "file with comments", "files with comments")
-			)
-		),
-		"",
-		divider_line(divider_width),
-		section_line("Summary"),
-		string.format(
-			"%s visible · %s total · %s",
-			plural(#visible, "thread"),
-			plural(summary.threads, "thread"),
-			plural(summary.files_with_threads, "file with comments", "files with comments")
-		),
-		string.format(
-			"%s · %s · %s · %s",
-			plural(summary.open, "open"),
-			plural(summary.draft, "draft"),
-			plural(summary.resolved, "resolved"),
-			plural(summary.stale, "stale")
-		),
-	})
-	local attention = attention_lines(session)
-	if #attention > 0 then
-		table.insert(lines, "")
-		vim.list_extend(lines, attention)
+	}
+	if session.kind == "github_pr" and (summary.local_draft or 0) > 0 then
+		table.insert(
+			lines,
+			warning_line(string.format("%s ready to publish · P publish", plural(summary.local_draft, "local draft")))
+		)
 	end
+	table.insert(lines, "")
+	table.insert(lines, divider_line(content_width))
+
 	local row_map = {}
 	local meta = {}
+	if session._thread_panel_help then
+		vim.list_extend(lines, help_document(content_width))
+		return lines, row_map, visible, meta
+	end
 	if #visible == 0 then
 		table.insert(lines, "")
 		table.insert(lines, section_line("Threads"))
-		local message = #(session.threads or {}) == 0 and "No review threads" or "No threads match the active filters"
-		table.insert(lines, message)
+		if #(session.threads or {}) == 0 then
+			table.insert(lines, "No review threads yet.")
+			table.insert(lines, context_line("Leave a comment from the diff to start the review."))
+		else
+			table.insert(lines, "No threads match the current filters.")
+			table.insert(lines, context_line("Press c to clear filters or / to change the search."))
+		end
 		return lines, row_map, visible, meta
 	end
 
-	table.insert(lines, "")
-	if content_width < 96 then
-		table.insert(lines, divider_line(divider_width))
-		table.insert(lines, section_line("Threads"))
-	end
 	local total_height = session.ui
 			and session.ui.thread_panel_win
 			and vim.api.nvim_win_is_valid(session.ui.thread_panel_win)
@@ -666,9 +680,8 @@ local function build_lines(session)
 			math.min(18, math.max(1, vim.o.lines - 4)),
 			math.max(1, vim.o.lines - 4)
 		)
-	session._thread_panel_pane_height = math.max(8, total_height - #lines - (session._thread_composer and 6 or 1))
-	append_thread_workspace(lines, row_map, session, visible, selected, content_width)
-	append_composer(lines, session, selected_thread_item, meta, divider_width)
+	session._thread_panel_pane_height = math.max(6, total_height - #lines - 3)
+	append_thread_workspace(lines, row_map, session, visible, selected, content_width, meta)
 	session._thread_panel_pane_height = nil
 	return lines, row_map, visible, meta
 end
@@ -683,54 +696,55 @@ function M.render_lines(session)
 	return renderer.lines(M.render_document(session))
 end
 
-function M.render_thread_document(thread)
+function M.render_thread_document(thread, width)
 	if not thread then
 		return { warning_line("No thread selected") }
 	end
 	local th_target = thread.target or {}
 	local st = thread_state(thread)
 	local state_hl = state_highlight_name(st)
+	local comments = thread.comments or {}
+	local location = (th_target.side or th_target.start_side) and ((th_target.side or th_target.start_side) .. " ")
+		or ""
+	local exported = threads.export_icon(thread) ~= " " and " · ⇪ marked for export" or ""
 	local lines = {
 		ui.line({
-			ui.text(STATE_ICONS[st] or "●", state_hl),
-			ui.text(" " .. thread_state_label(thread) .. " ", state_hl),
-			ui.badge(
-				(threads.export_icon(thread) == " " and "not exported" or "marked for export"),
-				{ hl = "UnifiedReviewThreadsBadge" }
-			),
-		}, { hl = state_hl }),
-		label_value_line("Target:", target_label(th_target)),
+			ui.text((STATE_ICONS[st] or "●") .. " " .. thread_state_label(thread), state_hl),
+			ui.text(string.format(" · %s%s · %s", location, target_label(th_target), plural(#comments, "comment"))),
+			ui.text(exported, "UnifiedReviewThreadsBadge"),
+		}),
 	}
 	if th_target.path then
-		table.insert(lines, label_value_line("File:", th_target.path))
+		table.insert(lines, context_line(th_target.path))
 	end
 	if thread.is_outdated then
-		table.insert(lines, warning_line("Warning: thread target is outdated"))
+		table.insert(lines, warning_line("This thread points to outdated code."))
 	end
-	if thread.id then
-		table.insert(lines, label_value_line("ID:", thread.id))
-	end
-	if not thread.comments or #thread.comments == 0 then
+	if #comments == 0 then
 		table.insert(lines, "")
-		table.insert(lines, "No comments")
+		table.insert(lines, "No comments in this thread.")
 		return lines
 	end
-	for i, comment in ipairs(thread.comments) do
+	local body_width = math.max(12, (width or 78) - 2)
+	for _, comment in ipairs(comments) do
 		table.insert(lines, "")
-		table.insert(
-			lines,
-			ui.text_line(string.format("Comment %d · %s", i, comment.author or "local"), "UnifiedReviewThreadsAuthor")
-		)
+		local author_line = comment.author or "local"
 		if comment.created_at then
-			table.insert(lines, ui.text_line(comment.created_at, "UnifiedReviewThreadsContext"))
+			author_line = author_line .. " · " .. comment.created_at
 		end
-		table.insert(lines, divider_line(24))
+		table.insert(lines, ui.text_line(author_line, "UnifiedReviewThreadsAuthor"))
 		local body = tostring(comment.body or "")
 		if body == "" then
-			table.insert(lines, "[empty]")
+			table.insert(lines, context_line("  Empty comment"))
 		else
-			for line in (body .. "\n"):gmatch("([^\n]*)\n") do
-				table.insert(lines, line)
+			for raw_line in (body .. "\n"):gmatch("([^\n]*)\n") do
+				if raw_line == "" then
+					table.insert(lines, "")
+				else
+					for _, body_line in ipairs(wrap_text(raw_line, body_width - 2)) do
+						table.insert(lines, "  " .. body_line)
+					end
+				end
 			end
 		end
 	end
@@ -972,6 +986,9 @@ local function focus_thread_target(session, thread, opts)
 	local buf = vim.api.nvim_win_get_buf(win)
 	local line_count = math.max(vim.api.nvim_buf_line_count(buf), 1)
 	pcall(vim.api.nvim_win_set_cursor, win, { math.min(row, line_count), 0 })
+	pcall(vim.api.nvim_win_call, win, function()
+		vim.cmd("normal! zz")
+	end)
 	debug.event("thread.jump.focus", {
 		thread = thread.id,
 		target = thread.target,
@@ -989,6 +1006,41 @@ local function focus_thread_target(session, thread, opts)
 	return true
 end
 
+local function diff_shows_thread(session, thread)
+	local root = session and session.target and (session.target.root or session.target.worktree_root)
+	local expected = normalize_path(thread and thread.target and thread.target.path, root)
+	local tab = session and session.ui and session.ui.codediff_tab
+	if not expected or not tab then
+		return true
+	end
+	local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+	if not ok then
+		return true
+	end
+	local original_path, modified_path = lifecycle.get_paths(tab)
+	return normalize_path(original_path, root) == expected or normalize_path(modified_path, root) == expected
+end
+
+local function render_thread_file_if_needed(session, thread)
+	if diff_shows_thread(session, thread) then
+		return false
+	end
+	debug.event("thread.jump.render_retry", { thread = thread.id, target = thread.target })
+	pcall(require("unified_review.ui.diff_view").render, session, {
+		auto_scroll_to_first_hunk = false,
+	})
+	return true
+end
+
+local function target_buffer_is_ready(session, thread)
+	local side = thread and thread.target and (thread.target.side or thread.target.start_side) or "right"
+	local win = side == "left" and session.ui.left_window or session.ui.right_window
+	if not win or not vim.api.nvim_win_is_valid(win) then
+		return false
+	end
+	return vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win)) >= target_row(thread)
+end
+
 local function jump_to_thread(session, thread)
 	if not thread then
 		debug.event("thread.jump.skip", { reason = "nil-thread" })
@@ -1002,6 +1054,10 @@ local function jump_to_thread(session, thread)
 		target = thread.target,
 		snapshot = codediff_snapshot(session),
 	})
+	M.close(session)
+	session._thread_jump_generation = (session._thread_jump_generation or 0) + 1
+	local generation = session._thread_jump_generation
+	local settled = false
 	local changed_file = select_file_for_thread(session, thread)
 	debug.event("thread.jump.select_file", {
 		thread = thread.id,
@@ -1019,11 +1075,39 @@ local function jump_to_thread(session, thread)
 		)
 	end
 	focus_thread_target(session, thread)
-	for _, delay in ipairs({ 40, 120, 250 }) do
+	settled = target_buffer_is_ready(session, thread) and diff_shows_thread(session, thread)
+	for _, delay in ipairs({ 40, 120, 250, 600, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4000 }) do
 		vim.defer_fn(function()
-			if state.get_active() == session then
+			local panel_open = session.ui
+				and session.ui.thread_panel_win
+				and vim.api.nvim_win_is_valid(session.ui.thread_panel_win)
+			if state.get_active() == session and session._thread_jump_generation == generation and not panel_open then
 				debug.event("thread.jump.retry", { thread = thread.id, delay = delay })
-				focus_thread_target(session, thread, { sync = true })
+				local rendered = render_thread_file_if_needed(session, thread)
+				if rendered then
+					settled = false
+					for _, recovery_delay in ipairs({ 100, 250, 500 }) do
+						vim.defer_fn(function()
+							local recovery_panel_open = session.ui
+								and session.ui.thread_panel_win
+								and vim.api.nvim_win_is_valid(session.ui.thread_panel_win)
+							if
+								state.get_active() == session
+								and session._thread_jump_generation == generation
+								and not recovery_panel_open
+								and diff_shows_thread(session, thread)
+								and target_buffer_is_ready(session, thread)
+							then
+								focus_thread_target(session, thread, { sync = true })
+								settled = true
+							end
+						end, recovery_delay)
+					end
+				end
+				if rendered or not settled or not target_buffer_is_ready(session, thread) then
+					focus_thread_target(session, thread, { sync = true })
+					settled = target_buffer_is_ready(session, thread) and diff_shows_thread(session, thread)
+				end
 			else
 				debug.event(
 					"thread.jump.retry.skip",
@@ -1059,20 +1143,9 @@ local function delete_thread_draft(thread)
 	end
 end
 
-local function strip_composer_padding(line)
-	line = tostring(line or "")
-	if line:sub(1, #HORIZONTAL_PADDING) == HORIZONTAL_PADDING then
-		return line:sub(#HORIZONTAL_PADDING + 1)
-	end
-	return line
-end
-
 local function normalize_body_lines(lines, opts)
 	opts = opts or {}
-	local normalized = {}
-	for _, line in ipairs(lines or {}) do
-		table.insert(normalized, strip_composer_padding(line))
-	end
+	local normalized = vim.deepcopy(lines or {})
 	if opts.trim then
 		while #normalized > 0 and normalized[1] == "" do
 			table.remove(normalized, 1)
@@ -1084,35 +1157,12 @@ local function normalize_body_lines(lines, opts)
 	return normalized
 end
 
-local function composer_region(session)
-	local ui_state = session and session.ui or {}
-	local info = ui_state.thread_panel_composer
-	local buf = ui_state.thread_panel_buf
-	if not info or not buf or not vim.api.nvim_buf_is_valid(buf) then
-		return nil
-	end
-	local start_pos = vim.api.nvim_buf_get_extmark_by_id(buf, M.compose_ns, info.start_mark, {})
-	local footer_pos = vim.api.nvim_buf_get_extmark_by_id(buf, M.compose_ns, info.footer_mark, {})
-	if not start_pos or not start_pos[1] or not footer_pos or not footer_pos[1] then
-		return nil
-	end
-	local line = (vim.api.nvim_buf_get_lines(buf, start_pos[1], start_pos[1] + 1, false) or {})[1] or ""
-	local start_col = line:sub(1, #HORIZONTAL_PADDING) == HORIZONTAL_PADDING and #HORIZONTAL_PADDING or 0
-	return {
-		buf = buf,
-		start_row = start_pos[1],
-		start_col = start_col,
-		footer_row = footer_pos[1],
-	}
-end
-
 local function read_composer_lines(session, opts)
-	local region = composer_region(session)
-	if not region then
+	local buf = session and session.ui and session.ui.thread_panel_composer_buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
 		return nil
 	end
-	local lines = vim.api.nvim_buf_get_lines(region.buf, region.start_row, region.footer_row, false)
-	return normalize_body_lines(lines, opts)
+	return normalize_body_lines(vim.api.nvim_buf_get_lines(buf, 0, -1, false), opts)
 end
 
 local function capture_composer(session)
@@ -1125,16 +1175,34 @@ local function capture_composer(session)
 	end
 end
 
+local function close_composer_window(session)
+	local ui_state = session and session.ui or {}
+	session._thread_composer_closing = true
+	if ui_state.thread_panel_composer_group then
+		pcall(vim.api.nvim_del_augroup_by_id, ui_state.thread_panel_composer_group)
+	end
+	if ui_state.thread_panel_composer_win and vim.api.nvim_win_is_valid(ui_state.thread_panel_composer_win) then
+		pcall(vim.api.nvim_win_close, ui_state.thread_panel_composer_win, true)
+	end
+	if ui_state.thread_panel_composer_buf and vim.api.nvim_buf_is_valid(ui_state.thread_panel_composer_buf) then
+		pcall(vim.api.nvim_buf_delete, ui_state.thread_panel_composer_buf, { force = true })
+	end
+	ui_state.thread_panel_composer_win = nil
+	ui_state.thread_panel_composer_buf = nil
+	ui_state.thread_panel_composer_group = nil
+	session._thread_composer_closing = false
+end
+
 local function focus_composer(session)
-	local region = composer_region(session)
-	local win = session and session.ui and session.ui.thread_panel_win
-	if not region or not win or not vim.api.nvim_win_is_valid(win) then
+	local win = session and session.ui and session.ui.thread_panel_composer_win
+	if not win or not vim.api.nvim_win_is_valid(win) then
 		return
 	end
 	vim.api.nvim_set_current_win(win)
-	pcall(vim.api.nvim_win_set_cursor, win, { region.start_row + 1, region.start_col })
 	vim.cmd("startinsert")
 end
+
+local open_composer_window
 
 local function begin_reply(session, thread)
 	if not session or not thread or not thread.id then
@@ -1142,11 +1210,14 @@ local function begin_reply(session, thread)
 	end
 	capture_composer(session)
 	session._thread_selected_id = thread.id
-	session._thread_composer = { thread_id = thread.id, lines = { "" } }
+	if content_width_for(session) < WIDE_LAYOUT_MIN_WIDTH then
+		session._thread_panel_view = "detail"
+	end
+	session._thread_composer = { thread_id = thread.id, lines = { "" }, body_height = 4 }
 	M.render(session)
 	vim.schedule(function()
 		if state.get_active() == session then
-			focus_composer(session)
+			open_composer_window(session)
 		end
 	end)
 end
@@ -1155,8 +1226,9 @@ local function cancel_reply(session)
 	if not session or not session._thread_composer then
 		return false
 	end
-	session._thread_composer = nil
 	pcall(vim.cmd, "stopinsert")
+	close_composer_window(session)
+	session._thread_composer = nil
 	M.render(session)
 	return true
 end
@@ -1172,18 +1244,255 @@ local function save_reply(session)
 		focus_composer(session)
 		return true
 	end
-	session._thread_composer = nil
-	pcall(vim.cmd, "stopinsert")
 	local result, err = require("unified_review.session.manager").reply(composer.thread_id, body)
 	if not result then
-		session._thread_composer = composer
-		M.render(session)
-		vim.notify(err and err.message or "failed to save reply", vim.log.levels.ERROR, { title = "unified-review" })
+		vim.notify(err and err.message or "Failed to save reply", vim.log.levels.ERROR, { title = "unified-review" })
 		focus_composer(session)
 		return true
 	end
+	pcall(vim.cmd, "stopinsert")
+	close_composer_window(session)
+	session._thread_composer = nil
 	M.render(session)
 	return true
+end
+
+open_composer_window = function(session)
+	local ui_state = session and session.ui or {}
+	local geometry = ui_state.thread_panel_composer
+	local panel_win = ui_state.thread_panel_win
+	if not geometry or not panel_win or not vim.api.nvim_win_is_valid(panel_win) then
+		return
+	end
+	if ui_state.thread_panel_composer_win and vim.api.nvim_win_is_valid(ui_state.thread_panel_composer_win) then
+		focus_composer(session)
+		return
+	end
+
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[buf].buftype = "acwrite"
+	vim.bo[buf].bufhidden = "wipe"
+	vim.bo[buf].swapfile = false
+	vim.bo[buf].filetype = "markdown"
+	pcall(vim.api.nvim_buf_set_name, buf, "unified-review://reply")
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, session._thread_composer.lines or { "" })
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "win",
+		win = panel_win,
+		row = geometry.row,
+		col = geometry.col,
+		width = math.max(1, geometry.width),
+		height = session._thread_composer.body_height or 4,
+		style = "minimal",
+		focusable = true,
+		noautocmd = true,
+		zindex = 80,
+	})
+	for name, value in pairs({
+		wrap = true,
+		linebreak = true,
+		breakindent = true,
+		number = false,
+		relativenumber = false,
+		signcolumn = "no",
+		foldcolumn = "0",
+		winhighlight = "NormalFloat:UnifiedReviewFloatNormal",
+	}) do
+		pcall(vim.api.nvim_set_option_value, name, value, { win = win, scope = "local" })
+	end
+	ui_state.thread_panel_composer_buf = buf
+	ui_state.thread_panel_composer_win = win
+	local group = vim.api.nvim_create_augroup("unified_review_thread_reply_" .. tostring(buf), { clear = true })
+	ui_state.thread_panel_composer_group = group
+
+	vim.keymap.set({ "n", "i", "x" }, "<C-s>", function()
+		save_reply(session)
+	end, { buffer = buf, silent = true })
+	vim.keymap.set({ "n", "i" }, "<Esc>", function()
+		cancel_reply(session)
+	end, { buffer = buf, silent = true })
+	vim.api.nvim_create_autocmd("BufWriteCmd", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			save_reply(session)
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = group,
+		buffer = buf,
+		callback = function()
+			local height = clamp(vim.api.nvim_buf_line_count(buf), 4, 8)
+			if session._thread_composer and height ~= session._thread_composer.body_height then
+				capture_composer(session)
+				session._thread_composer.body_height = height
+				vim.schedule(function()
+					if state.get_active() == session then
+						M.render(session)
+					end
+				end)
+			end
+		end,
+	})
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		pattern = tostring(win),
+		callback = function()
+			if session._thread_composer and not session._thread_composer_closing then
+				vim.schedule(function()
+					cancel_reply(session)
+				end)
+			end
+		end,
+	})
+	vim.api.nvim_win_set_cursor(win, { math.max(1, vim.api.nvim_buf_line_count(buf)), 0 })
+	vim.cmd("startinsert")
+end
+
+local function footer_items(session)
+	if session._thread_composer then
+		return {
+			{ label = "C-s", text = "save reply" },
+			{ label = "Esc", text = "cancel" },
+		}
+	end
+	if session._thread_panel_help then
+		return {
+			{ label = "Esc", text = "back" },
+			{ label = "q", text = "close" },
+		}
+	end
+
+	local content_width = content_width_for(session)
+	local narrow = content_width < WIDE_LAYOUT_MIN_WIDTH
+	local compact = content_width < 72
+	local item = selected_list_item(session, threads.filtered_threads(session))
+	if narrow and session._thread_panel_view == "detail" then
+		if compact then
+			return {
+				{ label = "Enter", text = "jump" },
+				{ label = "R", text = "reply" },
+				{ label = "Esc", text = "back" },
+				{ label = "?", text = "help" },
+				{ label = "q", text = "close" },
+			}
+		end
+		return {
+			{ label = "Enter", text = "jump" },
+			{ label = "R", text = "reply" },
+			{ label = "r", text = "resolve" },
+			{ label = "Esc", text = "threads" },
+			{ label = "?", text = "help" },
+			{ label = "q", text = "close" },
+		}
+	end
+	if not item then
+		return {
+			{ label = "/", text = "filter" },
+			{ label = "?", text = "help" },
+			{ label = "q", text = "close" },
+		}
+	end
+	if item.kind == "file" then
+		local items = {
+			{ label = "Enter", text = item.collapsed and "expand" or "collapse" },
+		}
+		if not compact then
+			vim.list_extend(items, {
+				{ label = "/", text = "filter" },
+				{ label = "S", text = "scope" },
+			})
+		end
+		table.insert(items, { label = "?", text = "help" })
+		table.insert(items, { label = "q", text = "close" })
+		return items
+	end
+	local primary = narrow and "details" or "jump"
+	local items = {
+		{ label = "Enter", text = primary },
+		{ label = "R", text = "reply" },
+	}
+	if not compact then
+		table.insert(items, {
+			label = "r",
+			text = thread_state(item.thread) == "resolved" and "reopen" or "resolve",
+		})
+	end
+	if not narrow then
+		vim.list_extend(items, {
+			{ label = "e", text = "export" },
+			{ label = "/", text = "filter" },
+		})
+	end
+	table.insert(items, { label = "?", text = "help" })
+	table.insert(items, { label = "q", text = "close" })
+	return items
+end
+
+local function close_action_bar(session)
+	local ui_state = session and session.ui or {}
+	if ui_state.thread_panel_action_win and vim.api.nvim_win_is_valid(ui_state.thread_panel_action_win) then
+		pcall(vim.api.nvim_win_close, ui_state.thread_panel_action_win, true)
+	end
+	if ui_state.thread_panel_action_buf and vim.api.nvim_buf_is_valid(ui_state.thread_panel_action_buf) then
+		pcall(vim.api.nvim_buf_delete, ui_state.thread_panel_action_buf, { force = true })
+	end
+	ui_state.thread_panel_action_win = nil
+	ui_state.thread_panel_action_buf = nil
+end
+
+local function render_action_bar(session)
+	local ui_state = session and session.ui or {}
+	local panel_win = ui_state.thread_panel_win
+	if not panel_win or not vim.api.nvim_win_is_valid(panel_win) then
+		return
+	end
+	local width = vim.api.nvim_win_get_width(panel_win)
+	local height = vim.api.nvim_win_get_height(panel_win)
+	local buf = ui_state.thread_panel_action_buf
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
+		buf = vim.api.nvim_create_buf(false, true)
+		vim.bo[buf].buftype = "nofile"
+		vim.bo[buf].bufhidden = "wipe"
+		vim.bo[buf].swapfile = false
+		pcall(vim.api.nvim_buf_set_name, buf, "unified-review://thread-actions")
+		ui_state.thread_panel_action_buf = buf
+	end
+
+	local action_line = key_hint_line(footer_items(session))
+	local action_width = vim.fn.strdisplaywidth(renderer.flatten_line(action_line).text)
+	local right_padding = "  "
+	local padding = string.rep(" ", math.max(0, width - action_width - vim.fn.strdisplaywidth(right_padding)))
+	vim.bo[buf].modifiable = true
+	renderer.render(buf, M.action_ns, {
+		divider_line(width),
+		ui.line({ ui.text(padding), action_line, ui.text(right_padding) }, { truncate_width = width }),
+	})
+	vim.bo[buf].modifiable = false
+
+	local action_win = ui_state.thread_panel_action_win
+	local config = {
+		relative = "win",
+		win = panel_win,
+		row = math.max(0, height - 2),
+		col = 0,
+		width = width,
+		height = 2,
+		style = "minimal",
+		focusable = false,
+		noautocmd = true,
+		zindex = 70,
+	}
+	if action_win and vim.api.nvim_win_is_valid(action_win) then
+		pcall(vim.api.nvim_win_set_config, action_win, config)
+	else
+		action_win = vim.api.nvim_open_win(buf, false, config)
+		ui_state.thread_panel_action_win = action_win
+	end
+	pcall(vim.api.nvim_set_option_value, "winhighlight", "NormalFloat:UnifiedReviewFloatNormal", {
+		win = action_win,
+		scope = "local",
+	})
 end
 
 --- Render the overview buffer content.
@@ -1204,22 +1513,33 @@ function M.render(session)
 	local rendered = renderer.render(buf, M.ns, document)
 	session.ui.thread_panel_composer = nil
 	if meta and meta.composer then
-		local start_row = meta.composer.start_row - 1
-		local footer_row = meta.composer.footer_row - 1
 		session.ui.thread_panel_composer = {
-			start_mark = vim.api.nvim_buf_set_extmark(buf, M.compose_ns, start_row, 0, {
-				right_gravity = false,
-			}),
-			footer_mark = vim.api.nvim_buf_set_extmark(buf, M.compose_ns, footer_row, 0, {
-				right_gravity = true,
-			}),
+			row = meta.composer.start_row - 1,
+			col = meta.composer.start_col or 0,
+			width = meta.composer.width or content_width_for(session),
 		}
+		local composer_win = session.ui.thread_panel_composer_win
+		if composer_win and vim.api.nvim_win_is_valid(composer_win) then
+			pcall(vim.api.nvim_win_set_config, composer_win, {
+				relative = "win",
+				win = session.ui.thread_panel_win,
+				row = session.ui.thread_panel_composer.row,
+				col = session.ui.thread_panel_composer.col,
+				width = math.max(1, session.ui.thread_panel_composer.width),
+				height = session._thread_composer and session._thread_composer.body_height or 4,
+			})
+		end
 	end
-	vim.bo[buf].modifiable = session.ui.thread_panel_composer ~= nil
+	vim.bo[buf].modifiable = false
 	vim.bo[buf].modified = false
 	session.ui.thread_panel_rows = row_map
+	render_action_bar(session)
 	if not session._thread_composer and rendered then
-		focus_selected_row(session)
+		if next(row_map) then
+			focus_selected_row(session)
+		elseif session.ui.thread_panel_win and vim.api.nvim_win_is_valid(session.ui.thread_panel_win) then
+			pcall(vim.api.nvim_win_set_cursor, session.ui.thread_panel_win, { 1, 0 })
+		end
 	end
 end
 
@@ -1228,34 +1548,48 @@ local function set_keymaps(session, buf)
 		vim.keymap.set("n", lhs, rhs, { buffer = buf, silent = true })
 	end
 	local toggle_fold
+	local function detail_is_focused()
+		return session._thread_panel_help
+			or (content_width_for(session) < WIDE_LAYOUT_MIN_WIDTH and session._thread_panel_view == "detail")
+	end
+	local function navigate(delta, normal_command)
+		if detail_is_focused() then
+			pcall(vim.cmd, "normal! " .. normal_command)
+		else
+			move_thread_selection(session, delta)
+		end
+	end
 	map("q", function()
 		M.close(session)
 	end)
 	map("j", function()
-		move_thread_selection(session, 1)
+		navigate(1, "j")
 	end)
 	map("k", function()
-		move_thread_selection(session, -1)
+		navigate(-1, "k")
 	end)
 	map("<Down>", function()
-		move_thread_selection(session, 1)
+		navigate(1, "j")
 	end)
 	map("<Up>", function()
-		move_thread_selection(session, -1)
+		navigate(-1, "k")
 	end)
 	map("<C-d>", function()
-		move_thread_selection(session, 8)
+		navigate(8, "8j")
 	end)
 	map("<PageDown>", function()
-		move_thread_selection(session, 8)
+		navigate(8, "8j")
 	end)
 	map("<C-u>", function()
-		move_thread_selection(session, -8)
+		navigate(-8, "8k")
 	end)
 	map("<PageUp>", function()
-		move_thread_selection(session, -8)
+		navigate(-8, "8k")
 	end)
 	map("<CR>", function()
+		if session._thread_panel_help then
+			return
+		end
 		local entry = selected_row_entry(session) or current_row_entry(session)
 		debug.event("thread.panel.enter", {
 			entry = entry and {
@@ -1271,8 +1605,17 @@ local function set_keymaps(session, buf)
 				session.ui.thread_panel_win
 			) and vim.api.nvim_win_get_cursor(session.ui.thread_panel_win)[1] or nil,
 		})
+		if content_width_for(session) < WIDE_LAYOUT_MIN_WIDTH and session._thread_panel_view == "detail" then
+			jump_to_thread(session, row_thread(session))
+			return
+		end
 		if entry and entry.kind == "file" then
 			toggle_fold()
+			return
+		end
+		if content_width_for(session) < WIDE_LAYOUT_MIN_WIDTH then
+			session._thread_panel_view = "detail"
+			M.render(session)
 			return
 		end
 		jump_to_thread(session, row_thread(session))
@@ -1281,9 +1624,21 @@ local function set_keymaps(session, buf)
 		M.render(session)
 	end)
 	map("R", function()
-		begin_reply(session, row_thread(session))
+		if not session._thread_panel_help then
+			begin_reply(session, row_thread(session))
+		end
+	end)
+	map("?", function()
+		if session._thread_composer then
+			return
+		end
+		session._thread_panel_help = not session._thread_panel_help
+		M.render(session)
 	end)
 	map("e", function()
+		if session._thread_panel_help then
+			return
+		end
 		local thread = row_thread(session)
 		if thread then
 			require("unified_review.session.manager").toggle_thread_export(thread.id)
@@ -1291,6 +1646,9 @@ local function set_keymaps(session, buf)
 		end
 	end)
 	map("r", function()
+		if session._thread_panel_help then
+			return
+		end
 		local thread = row_thread(session)
 		if thread then
 			if thread.state == "resolved" then
@@ -1302,10 +1660,16 @@ local function set_keymaps(session, buf)
 		end
 	end)
 	map("P", function()
+		if session._thread_panel_help then
+			return
+		end
 		require("unified_review.session.manager").publish_drafts()
 		M.render(session)
 	end)
 	map("D", function()
+		if session._thread_panel_help then
+			return
+		end
 		local thread = row_thread(session)
 		if thread then
 			delete_thread_draft(thread)
@@ -1313,6 +1677,9 @@ local function set_keymaps(session, buf)
 		end
 	end)
 	local function toggle_filter(key)
+		if session._thread_panel_help then
+			return
+		end
 		local filter = filter_for(session)
 		if key == "a" then
 			local enable = not (filter.open and filter.resolved and filter.draft and filter.stale)
@@ -1329,6 +1696,7 @@ local function set_keymaps(session, buf)
 		end
 		session._thread_selected_id = nil
 		session._thread_selected_key = nil
+		session._thread_panel_view = "list"
 		M.render(session)
 	end
 	for _, key in ipairs({ "o", "v", "d", "s", "a" }) do
@@ -1337,13 +1705,20 @@ local function set_keymaps(session, buf)
 		end)
 	end
 	map("c", function()
+		if session._thread_panel_help then
+			return
+		end
 		session._thread_query = nil
 		session._thread_filter = { open = true, resolved = true, draft = true, stale = true }
 		session._thread_selected_id = nil
 		session._thread_selected_key = nil
+		session._thread_panel_view = "list"
 		M.render(session)
 	end)
 	local function prompt_filter()
+		if session._thread_panel_help then
+			return
+		end
 		vim.ui.input({ prompt = "Filter review threads: ", default = session._thread_query or "" }, function(value)
 			if value == nil then
 				return
@@ -1352,18 +1727,26 @@ local function set_keymaps(session, buf)
 			session._thread_query = value ~= "" and value or nil
 			session._thread_selected_id = nil
 			session._thread_selected_key = nil
+			session._thread_panel_view = "list"
 			M.render(session)
 		end)
 	end
 	map("F", prompt_filter)
 	map("/", prompt_filter)
 	map("S", function()
+		if session._thread_panel_help then
+			return
+		end
 		session._thread_scope = threads.scope_for(session) == "project" and "current" or "project"
 		session._thread_selected_id = nil
 		session._thread_selected_key = nil
+		session._thread_panel_view = "list"
 		M.render(session)
 	end)
 	toggle_fold = function()
+		if session._thread_panel_help then
+			return
+		end
 		local entry = selected_row_entry(session) or current_row_entry(session)
 		local path = entry and entry.path
 		if not path then
@@ -1374,6 +1757,7 @@ local function set_keymaps(session, buf)
 			local collapsed = collapsed_files_for(session)
 			collapsed[path] = not collapsed[path]
 			set_selected_item(session, { kind = "file", path = path })
+			session._thread_panel_view = "list"
 			M.render(session)
 		end
 	end
@@ -1383,9 +1767,18 @@ local function set_keymaps(session, buf)
 		save_reply(session)
 	end, { buffer = buf, silent = true })
 	vim.keymap.set({ "n", "i" }, "<Esc>", function()
-		cancel_reply(session)
-		return "<Esc>"
-	end, { buffer = buf, expr = true, silent = true })
+		if cancel_reply(session) then
+			return
+		end
+		pcall(vim.cmd, "stopinsert")
+		if session._thread_panel_help then
+			session._thread_panel_help = false
+			M.render(session)
+		elseif content_width_for(session) < WIDE_LAYOUT_MIN_WIDTH and session._thread_panel_view == "detail" then
+			session._thread_panel_view = "list"
+			M.render(session)
+		end
+	end, { buffer = buf, silent = true })
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
 		buffer = buf,
 		callback = function()
@@ -1418,6 +1811,8 @@ function M.open(session)
 		return false
 	end
 	session.ui = session.ui or {}
+	session._thread_jump_generation = (session._thread_jump_generation or 0) + 1
+	session._thread_panel_view = session._thread_panel_view or "list"
 	if session.ui.thread_panel_win and vim.api.nvim_win_is_valid(session.ui.thread_panel_win) then
 		vim.api.nvim_set_current_win(session.ui.thread_panel_win)
 		M.render(session)
@@ -1451,6 +1846,8 @@ function M.open(session)
 			}),
 		},
 		on_close = function()
+			close_composer_window(session)
+			close_action_bar(session)
 			if session.ui and session.ui.thread_panel_win == panel_win then
 				session._thread_composer = nil
 				session.ui.thread_panel_buf = nil
@@ -1468,6 +1865,11 @@ function M.open(session)
 	session.ui.thread_panel_close = popup.close
 	set_keymaps(session, buf)
 	M.render(session)
+	if session._thread_panel_saved_view then
+		pcall(vim.api.nvim_win_call, panel_win, function()
+			vim.fn.winrestview(session._thread_panel_saved_view)
+		end)
+	end
 	return true
 end
 
@@ -1482,6 +1884,13 @@ function M.close(session)
 	local close_fn = session.ui.thread_panel_close
 	local win = session.ui.thread_panel_win
 	local buf = session.ui.thread_panel_buf
+	close_composer_window(session)
+	close_action_bar(session)
+	if win and vim.api.nvim_win_is_valid(win) then
+		pcall(vim.api.nvim_win_call, win, function()
+			session._thread_panel_saved_view = vim.fn.winsaveview()
+		end)
+	end
 	if close_fn then
 		pcall(close_fn)
 	else
@@ -1493,6 +1902,7 @@ function M.close(session)
 		end
 	end
 	session._thread_composer = nil
+	session._thread_panel_help = false
 	session.ui.thread_panel_buf = nil
 	session.ui.thread_panel_win = nil
 	session.ui.thread_panel_close = nil
