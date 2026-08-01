@@ -226,46 +226,46 @@ Agents should write one JSON object:
 
 ```json
 {
-  "schema": "unified-review.agent-feedback.v1",
-  "author": "pi-agent",
-  "source": {
-    "name": "pi-coding-agent",
-    "run_id": "optional-run-id",
-    "model": "optional-model-name"
-  },
-  "summary": "Optional overall review summary for the human.",
-  "comments": [
-    {
-      "id": "stable-agent-comment-id-1",
-      "body": "This condition can panic when config is nil.",
-      "severity": "warning",
-      "category": "bug",
-      "target": {
-        "kind": "line",
-        "path": "lua/example.lua",
-        "side": "right",
-        "line": 42
-      }
-    },
-    {
-      "body": "Consider extracting this block into a named helper.",
-      "target": {
-        "kind": "range",
-        "path": "lua/example.lua",
-        "start_line": 50,
-        "start_side": "right",
-        "line": 58,
-        "side": "right"
-      }
-    },
-    {
-      "body": "This file needs coverage for the new behavior.",
-      "target": {
-        "kind": "file",
-        "path": "tests/example_spec.lua"
-      }
-    }
-  ]
+	"schema": "unified-review.agent-feedback.v1",
+	"author": "pi-agent",
+	"source": {
+		"name": "pi-coding-agent",
+		"run_id": "optional-run-id",
+		"model": "optional-model-name"
+	},
+	"summary": "Optional overall review summary for the human.",
+	"comments": [
+		{
+			"id": "stable-agent-comment-id-1",
+			"body": "This condition can panic when config is nil.",
+			"severity": "warning",
+			"category": "bug",
+			"target": {
+				"kind": "line",
+				"path": "lua/example.lua",
+				"side": "right",
+				"line": 42
+			}
+		},
+		{
+			"body": "Consider extracting this block into a named helper.",
+			"target": {
+				"kind": "range",
+				"path": "lua/example.lua",
+				"start_line": 50,
+				"start_side": "right",
+				"line": 58,
+				"side": "right"
+			}
+		},
+		{
+			"body": "This file needs coverage for the new behavior.",
+			"target": {
+				"kind": "file",
+				"path": "tests/example_spec.lua"
+			}
+		}
+	]
 }
 ```
 
@@ -404,13 +404,13 @@ The agent writes feedback JSON and runs:
 
 ```ts
 await pi.exec(
-  "nvim",
-  [
-    "--headless",
-    "+lua require('unified_review.agent_feedback').import_file('/tmp/review.json', { target = 'current', open = false })",
-    "+qa",
-  ],
-  { cwd: ctx.cwd },
+	'nvim',
+	[
+		'--headless',
+		"+lua require('unified_review.agent_feedback').import_file('/tmp/review.json', { target = 'current', open = false })",
+		'+qa',
+	],
+	{ cwd: ctx.cwd },
 );
 ```
 
@@ -432,49 +432,49 @@ This complements the existing `/review` command in `diff-review.ts`, which expor
 ## Implementation Steps
 
 1. **Add schema validation module**
-   - New file: `lua/unified_review/agent_feedback/schema.lua` or keep private in `agent_feedback.lua`.
-   - Validate schema string, comments list, body, and target shape.
+    - New file: `lua/unified_review/agent_feedback/schema.lua` or keep private in `agent_feedback.lua`.
+    - Validate schema string, comments list, body, and target shape.
 
 2. **Add import/context/selection module**
-   - New file: `lua/unified_review/agent_feedback.lua`.
-   - Public functions: `select_target`, `import`, `import_file`, `context`, `write_context`.
-   - `select_target` should reuse the existing Neovim target picker and write a selected-target artifact.
+    - New file: `lua/unified_review/agent_feedback.lua`.
+    - Public functions: `select_target`, `import`, `import_file`, `context`, `write_context`.
+    - `select_target` should reuse the existing Neovim target picker and write a selected-target artifact.
 
 3. **Define the pi command around Neovim-first selection**
-   - `/ai-review` launches Neovim in agent-selection mode.
-   - Neovim writes a selected-target artifact and exits.
-   - pi writes context for the selected target.
-   - pi prompts the agent to review using that context and produce feedback JSON.
-   - pi imports the JSON headlessly and offers to open Neovim.
+    - `/ai-review` launches Neovim in agent-selection mode.
+    - Neovim writes a selected-target artifact and exits.
+    - pi writes context for the selected target.
+    - pi prompts the agent to review using that context and produce feedback JSON.
+    - pi imports the JSON headlessly and offers to open Neovim.
 
 4. **Add review-level notes**
-   - Add a domain model for review notes / review body drafts.
-   - Persist notes alongside threads in the local session store.
-   - Include notes in summary/export output.
-   - Map GitHub pending-review bodies onto this abstraction where possible.
+    - Add a domain model for review notes / review body drafts.
+    - Persist notes alongside threads in the local session store.
+    - Include notes in summary/export output.
+    - Map GitHub pending-review bodies onto this abstraction where possible.
 
 5. **Extend manager creation path if needed**
-   - Start by using `manager.create_comment`.
-   - If metadata/author cannot be represented cleanly, add optional `opts` to `manager.create_comment` and `local_store.create_thread`.
-   - Support dedupe/update by stable agent ids.
+    - Start by using `manager.create_comment`.
+    - If metadata/author cannot be represented cleanly, add optional `opts` to `manager.create_comment` and `local_store.create_thread`.
+    - Support dedupe/update by stable agent ids.
 
 6. **Add agent visual treatment**
-   - Show an agent/robot icon for threads and review notes with `metadata.agent_feedback`.
-   - Keep this presentation-only; the stored state remains normal draft comments/notes.
+    - Show an agent/robot icon for threads and review notes with `metadata.agent_feedback`.
+    - Keep this presentation-only; the stored state remains normal draft comments/notes.
 
 7. **Add commands**
-   - Extend `lua/unified_review/commands.lua` with `import-feedback`, `agent-select`, and `agent-context`.
-   - Update completion and help text.
+    - Extend `lua/unified_review/commands.lua` with `import-feedback`, `agent-select`, and `agent-context`.
+    - Update completion and help text.
 
 8. **Tests**
-   - Unit tests for schema validation.
-   - Integration test importing file, line, and range comments into a local review.
-   - Test skipped/warning behavior for unknown files.
-   - Test command wrapper calls the module.
+    - Unit tests for schema validation.
+    - Integration test importing file, line, and range comments into a local review.
+    - Test skipped/warning behavior for unknown files.
+    - Test command wrapper calls the module.
 
 9. **Docs**
-   - Add README section for agent feedback.
-   - Document schema v1, the recommended pi flow, and headless Neovim invocations.
+    - Add README section for agent feedback.
+    - Document schema v1, the recommended pi flow, and headless Neovim invocations.
 
 ## Open Questions
 

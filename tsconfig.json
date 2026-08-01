@@ -9,10 +9,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": [
-    "extensions/**/*.ts",
-    "scripts/**/*.ts",
-    "tests/**/*.ts",
-    "tui-test.config.ts"
-  ]
+  "include": ["extensions/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "tui-test.config.ts"]
 }

@@ -1,1 +1,1 @@
-export * from "../tui/artifacts.js";
+export * from '../tui/artifacts.js';

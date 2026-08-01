@@ -48,33 +48,33 @@ Packer users: adapt the above with `use({ ... })` and `requires = { ... }`.
 
 - Target picker:
 
-  ```vim
-  :UnifiedReview
-  ```
+    ```vim
+    :UnifiedReview
+    ```
 
 - Current jj change (or Git working target):
 
-  ```vim
-  :UnifiedReview current
-  ```
+    ```vim
+    :UnifiedReview current
+    ```
 
 - Explicit local Git range:
 
-  ```vim
-  :UnifiedReview local origin/main HEAD
-  ```
+    ```vim
+    :UnifiedReview local origin/main HEAD
+    ```
 
 - GitHub pull request (number or URL):
 
-  ```vim
-  :UnifiedReview pr 123
-  ```
+    ```vim
+    :UnifiedReview pr 123
+    ```
 
 - GitHub pull request comments with your local worktree on the right:
 
-  ```vim
-  :UnifiedReview pr-local 123
-  ```
+    ```vim
+    :UnifiedReview pr-local 123
+    ```
 
 ## Commands
 
@@ -109,24 +109,24 @@ The JSON shape is:
 
 ```json
 {
-  "schema": "unified-review.agent-feedback.v1",
-  "author": "pi-agent",
-  "source": { "name": "pi-coding-agent", "run_id": "optional-run-id" },
-  "summary": "Optional overall review summary.",
-  "comments": [
-    {
-      "id": "stable-comment-id",
-      "body": "This can panic when config is nil.",
-      "severity": "warning",
-      "category": "bug",
-      "target": {
-        "kind": "line",
-        "path": "lua/example.lua",
-        "side": "right",
-        "line": 42
-      }
-    }
-  ]
+	"schema": "unified-review.agent-feedback.v1",
+	"author": "pi-agent",
+	"source": { "name": "pi-coding-agent", "run_id": "optional-run-id" },
+	"summary": "Optional overall review summary.",
+	"comments": [
+		{
+			"id": "stable-comment-id",
+			"body": "This can panic when config is nil.",
+			"severity": "warning",
+			"category": "bug",
+			"target": {
+				"kind": "line",
+				"path": "lua/example.lua",
+				"side": "right",
+				"line": 42
+			}
+		}
+	]
 }
 ```
 
