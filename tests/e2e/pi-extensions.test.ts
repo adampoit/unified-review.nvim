@@ -1,14 +1,17 @@
 import { expect, test } from '@microsoft/tui-test';
-import { resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import { delay } from './helpers.js';
 
 const piCli = resolve('node_modules/@earendil-works/pi-coding-agent/dist/cli.js');
+const testPath = process.env.NVIM_BIN
+	? `${dirname(process.env.NVIM_BIN)}${delimiter}${process.env.PATH ?? ''}`
+	: process.env.PATH;
 
 test.use({
 	columns: 120,
 	rows: 36,
 	env: {
-		PATH: process.env.PATH,
+		PATH: testPath,
 		VIMINIT: `lua vim.opt.runtimepath:prepend(${JSON.stringify(resolve('.'))}); require("unified_review").setup({})`,
 	},
 	program: {
