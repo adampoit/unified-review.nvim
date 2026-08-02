@@ -1058,7 +1058,8 @@ local function jump_to_thread(session, thread)
 		ready_token = ready_token,
 	})
 	debug.event("thread.jump.render", {
-		ok = ok and rendered ~= false,
+		pcall_ok = ok,
+		render_result = rendered,
 		error = not ok and rendered or nil,
 		snapshot = codediff_snapshot(session),
 	})
