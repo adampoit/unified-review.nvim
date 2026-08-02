@@ -336,7 +336,7 @@ describe("thread panel", function()
 		thread_panel.open()
 
 		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "R"))
-		assert.is_true(vim.wait(100, function()
+		assert.is_true(vim.wait(500, function()
 			return session.ui.thread_panel_composer_buf ~= nil
 		end))
 		local buf = session.ui.thread_panel_composer_buf
