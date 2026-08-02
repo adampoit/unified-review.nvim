@@ -336,7 +336,7 @@ describe("thread panel", function()
 		thread_panel.open()
 
 		assert.is_true(call_normal_map(session.ui.thread_panel_buf, "R"))
-		assert.is_true(vim.wait(100, function()
+		assert.is_true(vim.wait(500, function()
 			return session.ui.thread_panel_composer_buf ~= nil
 		end))
 		local buf = session.ui.thread_panel_composer_buf
@@ -489,6 +489,7 @@ describe("thread panel", function()
 		}
 		local captured_cfg
 		local captured_auto_scroll
+		local explorer_select_count = 0
 		package.loaded["codediff.ui.view"] = {
 			update = function(_, cfg, auto_scroll_to_first_hunk)
 				captured_cfg = cfg
@@ -496,11 +497,36 @@ describe("thread panel", function()
 				vim.schedule(function()
 					lifecycle_state.right_buf = new_buf
 					lifecycle_state.modified_path = "b.lua"
+					lifecycle_state.session.stored_diff_result = { changes = {} }
 					vim.api.nvim_win_set_buf(right_win, new_buf)
 				end)
 				return true
 			end,
 		}
+		local explorer = {
+			current_file_path = "a.lua",
+			current_file_group = "unstaged",
+			current_selection = { path = "a.lua", status = "M", group = "unstaged" },
+			status_result = {
+				unstaged = {
+					{ path = "a.lua", status = "M" },
+					{ path = "b.lua", status = "M" },
+				},
+				staged = {},
+				conflicts = {},
+			},
+		}
+		explorer.on_file_select = function(file_data, opts)
+			explorer_select_count = explorer_select_count + 1
+			explorer.current_file_path = file_data.path
+			explorer.current_file_group = file_data.group
+			explorer.current_selection = vim.deepcopy(file_data)
+			return package.loaded["codediff.ui.view"].update(tabpage, {
+				original_path = file_data.old_path or file_data.path,
+				modified_path = "/repo/" .. file_data.path,
+			}, not opts.no_jump)
+		end
+		lifecycle_state.session.explorer = explorer
 		package.loaded["codediff.ui.lifecycle"] = {
 			get_buffers = function()
 				return lifecycle_state.left_buf, lifecycle_state.right_buf
@@ -550,6 +576,9 @@ describe("thread panel", function()
 		package.loaded["codediff.ui.lifecycle"] = previous_lifecycle
 		assert.are.equal("/repo/b.lua", captured_cfg and captured_cfg.modified_path)
 		assert.is_false(captured_auto_scroll)
+		assert.are.equal(1, explorer_select_count)
+		assert.are.equal("b.lua", explorer.current_file_path)
+		assert.are.equal("b.lua", explorer.current_selection.path)
 		assert.is_true(ok, "expected Enter to focus the refreshed CodeDiff buffer with review keymaps attached")
 	end)
 

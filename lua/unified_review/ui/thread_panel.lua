@@ -935,35 +935,16 @@ local function codediff_snapshot(session)
 	return snapshot
 end
 
-local function sync_diff_ui(session)
-	local ok, diff_view = pcall(require, "unified_review.ui.diff_view")
-	if not ok then
-		debug.event("thread.jump.sync_error", { error = diff_view })
-		return
-	end
-	if type(diff_view.sync) == "function" then
-		pcall(diff_view.sync, session)
-	end
-	if type(diff_view._attach_review_keymaps) == "function" then
-		pcall(diff_view._attach_review_keymaps, session)
-	end
-end
-
 local function target_row(thread)
 	local target = thread and thread.target or {}
 	return tonumber(target.line) or tonumber(target.start_line) or 1
 end
 
-local function focus_thread_target(session, thread, opts)
+local function focus_thread_target(session, thread)
 	if not thread or not thread.target or not session.ui then
 		debug.event("thread.jump.focus.skip", { reason = "missing-thread-or-ui", thread = thread and thread.id })
 		return false
 	end
-	opts = opts or {}
-	if opts.sync then
-		sync_diff_ui(session)
-	end
-	local selected = select_file_for_thread(session, thread)
 	local side = thread.target.side or thread.target.start_side or "right"
 	local row = selection.row_for_target(session, thread.target, side) or target_row(thread)
 	local win = side == "left" and session.ui.left_window or session.ui.right_window
@@ -978,7 +959,6 @@ local function focus_thread_target(session, thread, opts)
 			target = thread.target,
 			side = side,
 			row = row,
-			selected = selected,
 			snapshot = codediff_snapshot(session),
 		})
 		return false
@@ -996,7 +976,6 @@ local function focus_thread_target(session, thread, opts)
 		side = side,
 		row = row,
 		clamped_row = math.min(row, line_count),
-		selected = selected,
 		fallback_window = fallback,
 		win = win,
 		buf = buf,
@@ -1007,39 +986,11 @@ local function focus_thread_target(session, thread, opts)
 	return true
 end
 
-local function diff_shows_thread(session, thread)
-	local root = session and session.target and (session.target.root or session.target.worktree_root)
-	local expected = normalize_path(thread and thread.target and thread.target.path, root)
-	local tab = session and session.ui and session.ui.codediff_tab
-	if not expected or not tab then
-		return true
+local function clear_thread_jump_group(session)
+	if session._thread_jump_autocmd_group then
+		pcall(vim.api.nvim_del_augroup_by_id, session._thread_jump_autocmd_group)
+		session._thread_jump_autocmd_group = nil
 	end
-	local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
-	if not ok then
-		return true
-	end
-	local original_path, modified_path = lifecycle.get_paths(tab)
-	return normalize_path(original_path, root) == expected or normalize_path(modified_path, root) == expected
-end
-
-local function render_thread_file_if_needed(session, thread)
-	if diff_shows_thread(session, thread) then
-		return false
-	end
-	debug.event("thread.jump.render_retry", { thread = thread.id, target = thread.target })
-	pcall(require("unified_review.ui.diff_view").render, session, {
-		auto_scroll_to_first_hunk = false,
-	})
-	return true
-end
-
-local function target_buffer_is_ready(session, thread)
-	local side = thread and thread.target and (thread.target.side or thread.target.start_side) or "right"
-	local win = side == "left" and session.ui.left_window or session.ui.right_window
-	if not win or not vim.api.nvim_win_is_valid(win) then
-		return false
-	end
-	return vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win)) >= target_row(thread)
 end
 
 local function jump_to_thread(session, thread)
@@ -1056,66 +1007,65 @@ local function jump_to_thread(session, thread)
 		snapshot = codediff_snapshot(session),
 	})
 	M.close(session)
+	clear_thread_jump_group(session)
 	session._thread_jump_generation = (session._thread_jump_generation or 0) + 1
 	local generation = session._thread_jump_generation
-	local settled = false
-	local changed_file = select_file_for_thread(session, thread)
+	local selected = select_file_for_thread(session, thread)
 	debug.event("thread.jump.select_file", {
 		thread = thread.id,
-		changed_file = changed_file,
+		selected = selected,
 		selection_file_index = session and session.selection and session.selection.file_index,
 		current_file = (selection.current_file(session) or {}).path,
 	})
-	if changed_file then
-		local ok, err = pcall(require("unified_review.ui.diff_view").render, session, {
-			auto_scroll_to_first_hunk = false,
-		})
-		debug.event(
-			"thread.jump.render",
-			{ ok = ok, error = not ok and err or nil, snapshot = codediff_snapshot(session) }
-		)
+	if not selected then
+		debug.event("thread.jump.skip", { reason = "missing-target-file", thread = thread.id })
+		return
 	end
-	focus_thread_target(session, thread)
-	settled = target_buffer_is_ready(session, thread) and diff_shows_thread(session, thread)
-	for _, delay in ipairs({ 40, 120, 250, 600, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4000 }) do
-		vim.defer_fn(function()
+
+	local ready_token = table.concat({ tostring(session.id), tostring(generation), tostring(vim.loop.hrtime()) }, ":")
+	local group = vim.api.nvim_create_augroup(
+		"unified_review_thread_jump_" .. tostring(session.id or vim.loop.hrtime()),
+		{ clear = true }
+	)
+	session._thread_jump_autocmd_group = group
+	vim.api.nvim_create_autocmd("User", {
+		group = group,
+		pattern = { "UnifiedReviewDiffReady", "UnifiedReviewDiffFailed" },
+		callback = function(event)
+			if not event.data or event.data.token ~= ready_token then
+				return
+			end
+			clear_thread_jump_group(session)
 			local panel_open = session.ui
 				and session.ui.thread_panel_win
 				and vim.api.nvim_win_is_valid(session.ui.thread_panel_win)
-			if state.get_active() == session and session._thread_jump_generation == generation and not panel_open then
-				debug.event("thread.jump.retry", { thread = thread.id, delay = delay })
-				local rendered = render_thread_file_if_needed(session, thread)
-				if rendered then
-					settled = false
-					for _, recovery_delay in ipairs({ 100, 250, 500 }) do
-						vim.defer_fn(function()
-							local recovery_panel_open = session.ui
-								and session.ui.thread_panel_win
-								and vim.api.nvim_win_is_valid(session.ui.thread_panel_win)
-							if
-								state.get_active() == session
-								and session._thread_jump_generation == generation
-								and not recovery_panel_open
-								and diff_shows_thread(session, thread)
-								and target_buffer_is_ready(session, thread)
-							then
-								focus_thread_target(session, thread, { sync = true })
-								settled = true
-							end
-						end, recovery_delay)
-					end
-				end
-				if rendered or not settled or not target_buffer_is_ready(session, thread) then
-					focus_thread_target(session, thread, { sync = true })
-					settled = target_buffer_is_ready(session, thread) and diff_shows_thread(session, thread)
-				end
-			else
-				debug.event(
-					"thread.jump.retry.skip",
-					{ thread = thread.id, delay = delay, reason = "inactive-session" }
-				)
+			if state.get_active() ~= session or session._thread_jump_generation ~= generation or panel_open then
+				debug.event("thread.jump.ready.skip", { thread = thread.id, reason = "inactive-session" })
+				return
 			end
-		end, delay)
+			if event.match == "UnifiedReviewDiffFailed" then
+				debug.event("thread.jump.fallback", {
+					thread = thread.id,
+					reason = event.data.reason or "render-failed",
+				})
+			end
+			focus_thread_target(session, thread)
+		end,
+	})
+
+	local ok, rendered = pcall(require("unified_review.ui.diff_view").render, session, {
+		auto_scroll_to_first_hunk = false,
+		ready_token = ready_token,
+	})
+	debug.event("thread.jump.render", {
+		pcall_ok = ok,
+		render_result = rendered,
+		error = not ok and rendered or nil,
+		snapshot = codediff_snapshot(session),
+	})
+	if not ok or rendered == false then
+		clear_thread_jump_group(session)
+		focus_thread_target(session, thread)
 	end
 end
 
