@@ -1030,7 +1030,7 @@ local function jump_to_thread(session, thread)
 	session._thread_jump_autocmd_group = group
 	vim.api.nvim_create_autocmd("User", {
 		group = group,
-		pattern = "UnifiedReviewDiffReady",
+		pattern = { "UnifiedReviewDiffReady", "UnifiedReviewDiffFailed" },
 		callback = function(event)
 			if not event.data or event.data.token ~= ready_token then
 				return
@@ -1042,6 +1042,12 @@ local function jump_to_thread(session, thread)
 			if state.get_active() ~= session or session._thread_jump_generation ~= generation or panel_open then
 				debug.event("thread.jump.ready.skip", { thread = thread.id, reason = "inactive-session" })
 				return
+			end
+			if event.match == "UnifiedReviewDiffFailed" then
+				debug.event("thread.jump.fallback", {
+					thread = thread.id,
+					reason = event.data.reason or "render-failed",
+				})
 			end
 			focus_thread_target(session, thread)
 		end,
@@ -1058,6 +1064,7 @@ local function jump_to_thread(session, thread)
 	})
 	if not ok or rendered == false then
 		clear_thread_jump_group(session)
+		focus_thread_target(session, thread)
 	end
 end
 

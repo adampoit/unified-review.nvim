@@ -381,6 +381,32 @@ local function emit_render_ready(session, tabpage, generation, ready_token, path
 	return true
 end
 
+local function emit_render_failed(session, tabpage, generation, ready_token, path, reason)
+	if session._diff_render_generation ~= generation then
+		return false
+	end
+	debug.event("diff.render.failed", {
+		session = session.id,
+		tabpage = tabpage,
+		generation = generation,
+		path = path,
+		reason = reason,
+	})
+	vim.api.nvim_exec_autocmds("User", {
+		pattern = "UnifiedReviewDiffFailed",
+		modeline = false,
+		data = {
+			session_id = session.id,
+			tabpage = tabpage,
+			generation = generation,
+			token = ready_token,
+			path = path,
+			reason = reason,
+		},
+	})
+	return true
+end
+
 local function update_is_ready(session, tabpage, expected_path)
 	local _, lifecycle = codediff_modules()
 	if not lifecycle then
@@ -435,6 +461,7 @@ local function watch_update_ready(session, tabpage, generation, ready_token, pat
 					generation = generation,
 					path = path,
 				})
+				emit_render_failed(session, tabpage, generation, ready_token, path, "timeout")
 			end
 			return
 		end
